@@ -1,0 +1,15 @@
+.git/
+.worktrees/
+.superpowers/
+.claude/
+.codex/
+.wt-*
+blender/*.blend1
+blender/*.blend2
+blender/
+docs/
+tests/
+playwright.config.ts
+test-results/
+playwright-report/
+.playwright-cli/
