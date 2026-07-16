@@ -41,8 +41,14 @@ const withHeldModels = async (
   assertion: () => Promise<void>,
 ): Promise<void> => {
   let release = (): void => undefined;
+  let releasedModel = false;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   await page.route('**/models/*.glb', async (route) => {
+    if (!releasedModel) {
+      releasedModel = true;
+      await route.continue();
+      return;
+    }
     await gate;
     await route.continue();
   });
@@ -82,8 +88,9 @@ test('boots as a stage-aware cartridge screen with accessible progress', async (
     const progress = page.getByRole('progressbar', { name: 'Loading STAGE 01' });
     await expect(progress).toHaveAttribute('aria-valuemin', '0');
     await expect(progress).toHaveAttribute('aria-valuemax', '100');
-    await expect(progress).toHaveAttribute('aria-valuenow', /\d+/);
-    await expect(progress).toHaveAttribute('aria-valuetext', /\d+% loaded/);
+    await expect(page.locator('[data-loading-value]')).toHaveText('25');
+    await expect(progress).toHaveAttribute('aria-valuenow', '25');
+    await expect(progress).toHaveAttribute('aria-valuetext', '25% loaded');
   });
 });
 
@@ -287,6 +294,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
 
   await page.getByRole('button', { name: 'PRESS START' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+  await expect(attractStage).toHaveCSS('opacity', '0');
   const playingStage = await attractStage.evaluate((element) => ({
     opacity: Number(getComputedStyle(element).opacity),
     visibility: getComputedStyle(element).visibility,

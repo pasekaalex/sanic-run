@@ -209,6 +209,9 @@
   font-size: .52rem;
   line-height: 1.5;
   text-shadow: 2px 2px 0 var(--pixel-deep);
+}
+
+#app-ui[data-ui-theme='pixel-16'] :is(.start-callout, .arcade-menu__cursor) {
   animation: pixel-prompt-blink 840ms steps(2, end) infinite;
 }
 
