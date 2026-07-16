@@ -32,8 +32,26 @@ const beginRun = async (page: Page): Promise<void> => {
   await page.goto('/?seed=7&e2e=1');
   await expect(page.getByRole('heading', { name: '$SANIC' })).toBeVisible();
   await expect(page.getByText('SWIPE', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'GOTTA GO FAST' }).click();
+  await page.getByRole('button', { name: 'PRESS START' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+};
+
+const withHeldModels = async (
+  page: Page,
+  assertion: () => Promise<void>,
+): Promise<void> => {
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/models/*.glb', async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.goto('/?seed=7&e2e=1');
+  try {
+    await assertion();
+  } finally {
+    release();
+  }
 };
 
 const touchSwipe = async (
@@ -53,6 +71,32 @@ const touchSwipe = async (
   await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await session.detach();
 };
+
+test('boots as a stage-aware cartridge screen with accessible progress', async ({ page }) => {
+  await withHeldModels(page, async () => {
+    const ui = page.locator('#app-ui');
+    await expect(ui).toHaveAttribute('data-ui-theme', 'pixel-16');
+    await expect(ui).toHaveAttribute('data-arcade-shell', 'trench-circuit-94');
+    await expect(ui).toHaveAttribute('data-phase', 'loading');
+    await expect(page.locator('[data-view="loading"] [data-stage-label]')).toHaveText('STAGE 01');
+    const progress = page.getByRole('progressbar', { name: 'Loading STAGE 01' });
+    await expect(progress).toHaveAttribute('aria-valuemin', '0');
+    await expect(progress).toHaveAttribute('aria-valuemax', '100');
+    await expect(progress).toHaveAttribute('aria-valuenow', /\d+/);
+    await expect(progress).toHaveAttribute('aria-valuetext', /\d+% loaded/);
+  });
+});
+
+test('presents one selected PRESS START action and complete stage identity', async ({ page }) => {
+  await page.goto('/?seed=7&e2e=1');
+  await expect(page.locator('[data-view="intro"] [data-stage-label]')).toHaveText('STAGE 01');
+  await expect(page.locator('[data-view="intro"] [data-zone-label]')).toHaveText('TRENCH ZONE');
+  await expect(page.locator('[data-view="intro"] [data-act-label]')).toHaveText('ACT 1');
+  const start = page.getByRole('button', { name: 'PRESS START' });
+  await expect(start).toBeVisible();
+  await expect(start).toHaveAttribute('data-action', 'start');
+  await expect(page.getByText('GOTTA GO FAST', { exact: true })).toBeVisible();
+});
 
 test('creates a melodic browser audio graph only after the Start gesture', async ({ page }) => {
   await page.addInitScript(() => {
@@ -104,7 +148,7 @@ test('creates a melodic browser audio graph only after the Start gesture', async
   });
 
   expect(await readProbe()).toEqual({ contexts: 0, oscillatorTypes: [], bufferSources: 0 });
-  await page.getByRole('button', { name: 'GOTTA GO FAST' }).click();
+  await page.getByRole('button', { name: 'PRESS START' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
 
   await expect.poll(readProbe).toMatchObject({ contexts: 1 });
@@ -206,7 +250,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
     'THE CHART NEEDS MORE BLUE',
   ];
   await expect(page.locator('[data-meme-line]')).toHaveText(memes);
-  await expect(page.getByText('PRESS START', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'PRESS START' })).toBeVisible();
 
   const motion = await page.evaluate(() => {
     const style = (selector: string): CSSStyleDeclaration =>
@@ -217,7 +261,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
       checkerAnimation: style('.attract-stage__checker').animationName,
       ringAnimation: style('.pixel-ring').animationName,
       titleAnimation: style('.intro-panel h1').animationName,
-      promptAnimation: style('.start-callout').animationName,
+      promptAnimation: style('.arcade-menu__cursor').animationName,
       tickerAnimation: style('.meme-reel__track').animationName,
     };
   });
@@ -241,7 +285,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
   });
   expect(reelOffsets).toEqual([0, -28, -56, -84, -112, -140]);
 
-  await page.getByRole('button', { name: 'GOTTA GO FAST' }).click();
+  await page.getByRole('button', { name: 'PRESS START' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
   const playingStage = await attractStage.evaluate((element) => ({
     opacity: Number(getComputedStyle(element).opacity),
@@ -360,7 +404,7 @@ test('disables themed transitions when reduced motion is requested', async ({ pa
     const checker = getComputedStyle(document.querySelector('.attract-stage__checker')!);
     const ring = getComputedStyle(document.querySelector('.pixel-ring')!);
     const title = getComputedStyle(document.querySelector('.intro-panel h1')!);
-    const prompt = getComputedStyle(document.querySelector('.start-callout')!);
+    const prompt = getComputedStyle(document.querySelector('.arcade-menu__cursor')!);
     const ticker = getComputedStyle(document.querySelector('.meme-reel__track')!);
     return {
       buttonAnimation: button.animationName,
@@ -451,14 +495,14 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
     window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space' }));
     pauseOnSpin();
   }));
-  await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'PAUSED' })).toBeVisible();
   await expect(page.locator('#game-canvas')).toHaveAttribute('data-presentation', 'character');
   await expect(page.locator('#game-canvas')).toHaveAttribute('data-game-phase', 'paused');
   await page.getByRole('button', { name: 'Resume' }).click();
   await page.keyboard.press('ArrowLeft');
   await expect(page.locator('#app-ui')).toHaveAttribute('data-player-lane', '-1');
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
-  await expect(page.getByRole('dialog', { name: 'Run complete' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'GAME OVER' })).toBeVisible();
   await page.getByRole('button', { name: 'RUN IT BACK' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
 });
@@ -633,7 +677,7 @@ test('touch swipe changes lane and the pause dialog stays inside the viewport', 
   await touchSwipe(page, { x: 195, y: 680 }, { x: 195, y: 520 });
   await expect(page.locator('#app-ui')).toHaveAttribute('data-player-airborne', 'true');
   await page.getByRole('button', { name: 'Pause' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Paused' });
+  const dialog = page.getByRole('dialog', { name: 'PAUSED' });
   const box = await dialog.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.x).toBeGreaterThanOrEqual(0);
@@ -656,9 +700,9 @@ test('short landscape keeps launch and pause legal controls scrollable', async (
   const introLegal = intro.getByText(/No utility, no promises, no financial advice/);
   await introLegal.scrollIntoViewIfNeeded();
   await expect(introLegal).toBeVisible();
-  await intro.getByRole('button', { name: 'GOTTA GO FAST' }).click();
+  await intro.getByRole('button', { name: 'PRESS START' }).click();
   await page.getByRole('button', { name: 'Pause' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Paused' });
+  const dialog = page.getByRole('dialog', { name: 'PAUSED' });
   for (const control of [
     dialog.getByRole('button', { name: 'Copy contract' }),
     dialog.getByRole('link', { name: 'View on Pump.fun' }),

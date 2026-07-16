@@ -36,8 +36,20 @@ const contractMarkup = (className: string): string => `
   </div>
 `;
 
+const stageMarqueeMarkup = (): string => `
+  <div class="stage-marquee" data-stage-marquee>
+    <span class="stage-marquee__checker" aria-hidden="true"></span>
+    <span class="stage-marquee__chrome" aria-hidden="true"></span>
+    <span class="stage-marquee__ring" aria-hidden="true"></span>
+    <span data-stage-label>STAGE 01</span>
+    <strong data-zone-label>TRENCH ZONE</strong>
+    <span data-act-label>ACT 1</span>
+  </div>
+`;
+
 export class GameUI {
   private readonly loading: HTMLElement;
+  private readonly loadingMeter: HTMLElement;
   private readonly loadingBar: HTMLElement;
   private readonly loadingValue: HTMLElement;
   private readonly intro: HTMLElement;
@@ -72,6 +84,7 @@ export class GameUI {
     private readonly actions: UIActions,
   ) {
     root.dataset.uiTheme = 'pixel-16';
+    root.dataset.arcadeShell = 'trench-circuit-94';
     root.replaceChildren();
     root.innerHTML = `
       <header class="topbar" aria-label="$SANIC quick links">
@@ -81,6 +94,15 @@ export class GameUI {
       </header>
 
       <div class="attract-stage" data-attract-stage aria-hidden="true">
+        <div class="arcade-bezel" data-arcade-bezel aria-hidden="true">
+          <span class="arcade-bezel__top"></span>
+          <span class="arcade-bezel__right"></span>
+          <span class="arcade-bezel__bottom"></span>
+          <span class="arcade-bezel__left"></span>
+        </div>
+        <div class="arcade-score-strip" data-arcade-score-strip aria-hidden="true">
+          <span>1 PLAYER</span><span>HI 000000</span><span>1994 MODE</span>
+        </div>
         <span class="attract-stage__cloud attract-stage__cloud--one"></span>
         <span class="attract-stage__cloud attract-stage__cloud--two"></span>
         <div class="attract-stage__hills">
@@ -96,17 +118,20 @@ export class GameUI {
       </div>
 
       <section class="loading-card" data-view="loading" aria-labelledby="loading-title">
+        ${stageMarqueeMarkup()}
         <p class="kicker">RUNNING UP THE TRENCHES</p>
         <h1 id="loading-title">$SANIC</h1>
-        <div class="loading-meter" aria-hidden="true"><span data-loading-bar></span></div>
+        <div class="loading-meter" role="progressbar" aria-label="Loading STAGE 01"
+          aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+          aria-valuetext="0% loaded"><span data-loading-bar></span></div>
         <p class="loading-percent"><span data-loading-value>0</span>% LOADED</p>
       </section>
 
       <section class="intro-panel" data-view="intro" aria-labelledby="intro-title" hidden>
+        ${stageMarqueeMarkup()}
         <p class="kicker">${BRAND.tagline}</p>
         <h1 id="intro-title">${BRAND.name}</h1>
         <p class="context-banner" role="alert" data-context-banner hidden>SANIC HIT A DIMENSIONAL WALL</p>
-        <p class="start-callout" aria-hidden="true"><span>PRESS START</span><b>◆</b><span>GOTTA GO FAST</span></p>
         <div class="meme-reel" role="group" data-meme-ticker aria-label="$SANIC meme reel">
           <span class="meme-reel__label" aria-hidden="true">LIVE FROM THE TRENCHES</span>
           <div class="meme-reel__window">
@@ -121,7 +146,11 @@ export class GameUI {
           </div>
         </div>
         <p class="intro-panel__tagline">RUN THE TRENCHES. STACK RINGS.<br><strong>GO FAST.</strong></p>
-        <button class="primary-button" type="button" data-action="start">GOTTA GO FAST</button>
+        <div class="arcade-menu" data-arcade-menu>
+          <span class="arcade-menu__cursor" aria-hidden="true">▶</span>
+          <button class="primary-button" type="button" data-action="start">PRESS START</button>
+          <small>GOTTA GO FAST</small>
+        </div>
         ${contractMarkup('contract--intro')}
         <nav class="intro-panel__links" aria-label="Launch links">${linkMarkup()}</nav>
         <div class="controls-copy" aria-label="Game controls">
@@ -145,8 +174,9 @@ export class GameUI {
 
       <dialog class="game-dialog pause-dialog" aria-labelledby="pause-title" data-dialog="pause">
         <div class="dialog-card">
+          ${stageMarqueeMarkup()}
           <p class="kicker">SPEED TEMPORARILY REVOKED</p>
-          <h2 id="pause-title">Paused</h2>
+          <h2 id="pause-title">PAUSED</h2>
           <p class="context-banner" role="alert" data-context-banner hidden>SANIC HIT A DIMENSIONAL WALL</p>
           <div class="pause-stats"><span>SCORE <b data-pause-score>0</b></span><span>DISTANCE <b data-pause-distance>0m</b></span></div>
           <button class="primary-button" type="button" data-action="resume">RESUME</button>
@@ -159,8 +189,9 @@ export class GameUI {
 
       <dialog class="game-dialog results-dialog" aria-labelledby="results-title" data-dialog="results">
         <div class="dialog-card">
+          ${stageMarqueeMarkup()}
           <p class="kicker">THE TIMELINE COULDN'T KEEP UP</p>
-          <h2 id="results-title">Run complete</h2>
+          <h2 id="results-title">GAME OVER</h2>
           <p class="context-banner" role="alert" data-context-banner hidden>SANIC HIT A DIMENSIONAL WALL</p>
           <p class="rank" data-results-rank>SIDELINED</p>
           <dl class="results-grid">
@@ -182,6 +213,7 @@ export class GameUI {
         <img src="/media/sanic-game-promo.png" alt="Buff blue Sanic charging through a forest of gold rings" data-unsupported-promo>
         <div class="unsupported-panel__scrim"></div>
         <div class="unsupported-panel__content">
+          ${stageMarqueeMarkup()}
           <p class="kicker">STATIC SPEED MODE</p>
           <h1 id="unsupported-title">$SANIC</h1>
           <p class="unsupported-reason" data-unsupported-reason></p>
@@ -195,6 +227,7 @@ export class GameUI {
     `;
 
     this.loading = this.required('[data-view="loading"]');
+    this.loadingMeter = this.required('.loading-meter');
     this.loadingBar = this.required('[data-loading-bar]');
     this.loadingValue = this.required('[data-loading-value]');
     this.intro = this.required('[data-view="intro"]');
@@ -232,6 +265,8 @@ export class GameUI {
     this.setPhase('loading');
     this.loadingBar.style.width = `${percent}%`;
     this.loadingValue.textContent = String(percent);
+    this.loadingMeter.setAttribute('aria-valuenow', String(percent));
+    this.loadingMeter.setAttribute('aria-valuetext', `${percent}% loaded`);
   }
 
   public showIntro(): void {
