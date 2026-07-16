@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 
 EXPECTED_BONES = {
@@ -62,7 +62,15 @@ def ensure_input(path: Path) -> None:
 
 
 def mesh_objects() -> list[bpy.types.Object]:
-    return [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
+    return [
+        obj
+        for obj in bpy.context.scene.objects
+        if obj.type == "MESH"
+        # Blender's glTF importer creates a local-only Icosphere custom shape
+        # for joints. It is not a node in the GLB and must not count as game
+        # geometry, bounds, triangles, or skin weights.
+        and all(collection.name != "glTF_not_exported" for collection in obj.users_collection)
+    ]
 
 
 def world_bounds(objects: list[bpy.types.Object]) -> tuple[Vector, Vector]:
@@ -157,12 +165,34 @@ def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
     maximum_root_y = 0.0
     first_rotations: dict[str, tuple[float, float, float, float]] = {}
     final_rotations: dict[str, tuple[float, float, float, float]] = {}
+    minimum_ground_clearance = float("inf")
+    left_hand_forward_positions: list[float] = []
+    right_hand_forward_positions: list[float] = []
+    passing_knee_heights: list[float] = []
     for frame in range(1, 25):
         scene.frame_set(frame)
         bpy.context.view_layer.update()
         root = rig.pose.bones["root"]
-        maximum_root_x = max(maximum_root_x, abs(root.location.x))
-        maximum_root_y = max(maximum_root_y, abs(root.location.y))
+        rest_head = rig.matrix_world @ rig.data.bones["root"].head_local
+        posed_head = rig.matrix_world @ root.head
+        displacement = posed_head - rest_head
+        maximum_root_x = max(maximum_root_x, abs(displacement.x))
+        maximum_root_y = max(maximum_root_y, abs(displacement.y))
+        left_hand_forward_positions.append(rig.pose.bones["hand.L"].head.y)
+        right_hand_forward_positions.append(rig.pose.bones["hand.R"].head.y)
+        if frame == 4:
+            passing_knee_heights.append(rig.pose.bones["lower_leg.R"].head.z)
+        elif frame == 16:
+            passing_knee_heights.append(rig.pose.bones["lower_leg.L"].head.z)
+        for obj in mesh_objects():
+            evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            minimum_ground_clearance = min(
+                minimum_ground_clearance,
+                min(
+                    (evaluated.matrix_world @ Vector(corner)).z
+                    for corner in evaluated.bound_box
+                ),
+            )
         if frame in {1, 24}:
             destination = first_rotations if frame == 1 else final_rotations
             for bone in rig.pose.bones:
@@ -184,11 +214,26 @@ def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
     assert largest_cycle_error <= 1e-4, (
         f"Run first/final pose mismatch is {largest_cycle_error:.8f}"
     )
+    assert minimum_ground_clearance >= -0.002, (
+        f"Run feet penetrate the ground by {-minimum_ground_clearance:.6f} m"
+    )
+    hand_travel = min(
+        max(left_hand_forward_positions) - min(left_hand_forward_positions),
+        max(right_hand_forward_positions) - min(right_hand_forward_positions),
+    )
+    assert hand_travel >= 0.36, f"Run hand travel is too weak: {hand_travel:.6f} m"
+    minimum_passing_knee_height = min(passing_knee_heights)
+    assert minimum_passing_knee_height >= 0.46, (
+        f"Run passing knee is too low: {minimum_passing_knee_height:.6f} m"
+    )
     rig.animation_data.action = None
     return {
         "maximum_root_x": maximum_root_x,
         "maximum_root_y": maximum_root_y,
         "cycle_error": largest_cycle_error,
+        "minimum_ground_clearance": minimum_ground_clearance,
+        "hand_travel": hand_travel,
+        "minimum_passing_knee_height": minimum_passing_knee_height,
     }
 
 
@@ -200,6 +245,16 @@ def validate_common(mode: str) -> dict[str, object]:
     bones = set(rig.data.bones.keys())
     missing_bones = EXPECTED_BONES - bones
     assert not missing_bones, f"Rig is missing bones: {sorted(missing_bones)}"
+
+    # Blender's glTF importer assigns the final imported action to the rig.
+    # Three.js does not autoplay a clip, so measure the same neutral bind pose
+    # the game initially renders rather than an arbitrary Crash frame.
+    rig.animation_data_create()
+    rig.animation_data.action = None
+    for bone in rig.pose.bones:
+        bone.matrix_basis = Matrix.Identity(4)
+    bpy.context.scene.frame_set(0)
+    bpy.context.view_layer.update()
 
     ranges = action_ranges()
     assert ranges == EXPECTED_ACTION_RANGES, (
