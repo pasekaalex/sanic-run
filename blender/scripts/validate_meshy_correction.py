@@ -112,7 +112,10 @@ def reset_and_import(asset_path: Path) -> None:
             f"SANIC correction input does not exist: {asset_path}"
         )
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    result = bpy.ops.import_scene.gltf(filepath=str(asset_path))
+    if asset_path.suffix.lower() == ".fbx":
+        result = bpy.ops.import_scene.fbx(filepath=str(asset_path), use_anim=False)
+    else:
+        result = bpy.ops.import_scene.gltf(filepath=str(asset_path))
     assert result == {"FINISHED"}, result
 
 
@@ -277,8 +280,9 @@ def main() -> None:
     else:
         assert len(arguments) == 2, f"{mode} mode requires one asset path"
         asset_path = Path(arguments[1]).expanduser().resolve()
-        if mode == "character":
+        if mode in {"character", "character-fbx"}:
             report = validate_character(asset_path)
+            report["mode"] = mode
         elif mode == "spin-ball":
             report = validate_spin_ball(asset_path)
         else:

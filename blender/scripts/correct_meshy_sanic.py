@@ -29,6 +29,7 @@ OUTPUT_DIR = Path(
 ).expanduser().resolve()
 BLEND_PATH = OUTPUT_DIR / "SANIC-meshy6-v1-corrected.blend"
 CHARACTER_GLB = OUTPUT_DIR / "SANIC-meshy6-v1-corrected.glb"
+CHARACTER_FBX = OUTPUT_DIR / "SANIC-meshy6-v1-corrected.fbx"
 SPIN_GLB = OUTPUT_DIR / "SANIC-spin-ball-v1.glb"
 
 TARGET_HEIGHT = 1.70
@@ -764,6 +765,40 @@ def export_selected(
     assert result == {"FINISHED"}, result
 
 
+def export_character_fbx(
+    objects: list[bpy.types.Object],
+    path: Path,
+) -> None:
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in objects:
+        obj.hide_set(False)
+        obj.hide_viewport = False
+        obj.hide_render = False
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = objects[0]
+    result = bpy.ops.export_scene.fbx(
+        filepath=str(path),
+        use_selection=True,
+        object_types={"MESH"},
+        apply_unit_scale=True,
+        apply_scale_options="FBX_SCALE_UNITS",
+        axis_forward="-Z",
+        axis_up="Y",
+        use_space_transform=True,
+        bake_space_transform=False,
+        use_mesh_modifiers=True,
+        mesh_smooth_type="FACE",
+        use_tspace=True,
+        use_triangles=False,
+        add_leaf_bones=False,
+        bake_anim=False,
+        path_mode="COPY",
+        embed_textures=True,
+        use_custom_props=True,
+    )
+    assert result == {"FINISHED"}, result
+
+
 def main() -> None:
     reset_scene()
     raw_collection = new_collection(RAW_COLLECTION_NAME)
@@ -834,6 +869,7 @@ def main() -> None:
     bpy.ops.wm.save_as_mainfile(filepath=str(BLEND_PATH), check_existing=False)
     character_objects = [body, *gloves, *face_overlays]
     export_selected(character_objects, CHARACTER_GLB)
+    export_character_fbx(character_objects, CHARACTER_FBX)
     export_selected([spin_ball], SPIN_GLB, tangents=False)
     character_turnaround, spin_turnaround = render_qa_turnarounds(
         character_objects,
@@ -848,6 +884,7 @@ def main() -> None:
             "source": str(SOURCE),
             "blend": str(BLEND_PATH),
             "character_glb": str(CHARACTER_GLB),
+            "character_fbx": str(CHARACTER_FBX),
             "spin_glb": str(SPIN_GLB),
             "character_turnaround": str(character_turnaround),
             "spin_turnaround": str(spin_turnaround),
