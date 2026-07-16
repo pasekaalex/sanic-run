@@ -51,5 +51,6 @@ describe('Vercel content security policy', () => {
     expect(directives.get('script-src')).toContain("'wasm-unsafe-eval'");
     expect(directives.get('script-src')).not.toContain("'unsafe-eval'");
     expect(directives.get('worker-src')).toEqual(["'self'", 'blob:']);
+    expect(directives.get('connect-src')).toEqual(["'self'", 'blob:']);
   });
 });
