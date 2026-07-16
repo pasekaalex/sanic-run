@@ -4,7 +4,7 @@
 
 **Goal:** Turn the accepted Meshy 6 base into a correctly scaled, cleaner static SANIC rigging master and a lightweight dedicated spin-ball model without modifying or publishing the raw generation.
 
-**Architecture:** A deterministic Blender build script imports the private raw GLB from a caller-supplied path, preserves it in a hidden source collection, creates a 1.70 m correction copy, replaces the pointed glove tips with five-digit glove assemblies, softens the two ear-like crown peaks, adds restrained sleepy-face overlays, and builds a separate low-poly spin-ball. A second Blender script validates the exported GLBs and the saved source scene. Generated binary assets remain in `/home/alex/Downloads/SANIC-Meshy-v1`; only reproducible scripts and tests enter the public repository.
+**Architecture:** A deterministic Blender build script imports the private raw GLB from a caller-supplied path, preserves it in a hidden source collection, creates a 1.70 m correction copy, replaces the pointed glove tips with five-digit glove assemblies, projects restrained sleepy-face overlays onto the actual surface, and builds a separate low-poly spin-ball. Direct deformation of the single textured quill surface is intentionally excluded after turnaround QA showed unacceptable UV stretching; the clean generated crown is preserved for a later manual topology pass. A second Blender script validates the exported GLBs, saved source scene, and deterministic renders. Generated binary assets remain in `/home/alex/Downloads/SANIC-Meshy-v1`; only reproducible scripts and tests enter the public repository.
 
 **Tech Stack:** Blender 5.1 Python API, bmesh, Blender glTF exporter, GLB, Vitest for repository tests.
 
@@ -190,9 +190,9 @@ def build_glove(side: str, cuff_x: float, arm_z: float,
     return parts[0]
 ```
 
-- [ ] **Step 4: Correct crown and face readability**
+- [ ] **Step 4: Preserve crown quality and correct face readability**
 
-Apply a smooth falloff to working-copy vertices above `88%` of the character height: reduce excess Z by up to `8%` of height and shift the crown toward positive Y by up to `4%` of height so the two upright peaks join the swept-back quill silhouette. Add thin separate sleepy eyelid and brow meshes in front of the existing face, named with the `SANIC_Face_*` contract, using off-white lids and dark brows. Keep the underlying Meshy texture and compact shoes unchanged.
+Keep the accepted Meshy crown topology and UVs unchanged. Add thin separate sleepy eyelid and brow meshes, named with the `SANIC_Face_*` contract, then apply and bake a nearest-surface shrinkwrap so every accent remains within `0.018 m` of the face from side and three-quarter views. Keep the underlying Meshy texture and compact shoes unchanged. Any later crown reshape requires a manual retopology/sculpt pass rather than coordinate warping of the textured triangulated mesh.
 
 - [ ] **Step 5: Save and export only the correction collection**
 

@@ -37,6 +37,7 @@ EXPECTED_CORRECTED = {
 EXPECTED_SPIN = {"SANIC_SpinBall"}
 EXPORT_COLLECTIONS = {"SANIC_CHARACTER_EXPORT", "SANIC_SPIN_EXPORT"}
 RAW_COLLECTION = "SANIC_RAW_PRIVATE"
+TURNAROUND_VIEWS = {"front", "back", "left", "right", "three-quarter"}
 
 
 def arguments_after_separator() -> list[str]:
@@ -236,6 +237,33 @@ def validate_source() -> dict[str, object]:
     }
 
 
+def validate_renders(output_dir: Path) -> dict[str, object]:
+    if not output_dir.is_dir():
+        raise FileNotFoundError(
+            f"SANIC correction render directory does not exist: {output_dir}"
+        )
+    validated: dict[str, int] = {}
+    for directory_name in ("corrected-turnaround", "spin-ball-turnaround"):
+        directory = output_dir / directory_name
+        missing = [
+            str(directory / f"{view}.png")
+            for view in sorted(TURNAROUND_VIEWS)
+            if not (directory / f"{view}.png").is_file()
+        ]
+        assert not missing, f"Missing SANIC turnaround renders: {missing}"
+        for view in sorted(TURNAROUND_VIEWS):
+            path = directory / f"{view}.png"
+            image = bpy.data.images.load(str(path), check_existing=False)
+            try:
+                assert tuple(image.size) == (1024, 1024), (
+                    f"{path} must be 1024x1024, got {tuple(image.size)}"
+                )
+            finally:
+                bpy.data.images.remove(image)
+        validated[directory_name] = len(TURNAROUND_VIEWS)
+    return {"mode": "renders", "sets": validated}
+
+
 def main() -> None:
     arguments = arguments_after_separator()
     assert arguments, "Expected validation mode: source, character, or spin-ball"
@@ -243,6 +271,9 @@ def main() -> None:
     if mode == "source":
         assert len(arguments) == 1, "source mode reads the already-open Blender file"
         report = validate_source()
+    elif mode == "renders":
+        assert len(arguments) == 2, "renders mode requires the correction output directory"
+        report = validate_renders(Path(arguments[1]).expanduser().resolve())
     else:
         assert len(arguments) == 2, f"{mode} mode requires one asset path"
         asset_path = Path(arguments[1]).expanduser().resolve()

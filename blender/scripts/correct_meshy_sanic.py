@@ -586,6 +586,156 @@ def build_spin_ball(
     return spin_ball
 
 
+def point_at(obj: bpy.types.Object, target: Vector) -> None:
+    obj.rotation_euler = (target - obj.location).to_track_quat("-Z", "Y").to_euler()
+
+
+def render_turnaround_set(
+    *,
+    camera: bpy.types.Object,
+    ground: bpy.types.Object,
+    lights: list[bpy.types.Object],
+    visible: list[bpy.types.Object],
+    hidden: list[bpy.types.Object],
+    output_dir: Path,
+    target_height: float,
+    ortho_scale: float,
+    ground_height: float,
+    distance: float,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for obj in visible:
+        obj.hide_render = False
+        obj.hide_set(False)
+    for obj in hidden:
+        obj.hide_render = True
+        obj.hide_set(True)
+    ground.location.z = ground_height
+    camera.data.ortho_scale = ortho_scale
+    target = Vector((0.0, 0.0, target_height))
+    for light in lights:
+        point_at(light, target)
+
+    views = {
+        "front": Vector((0.0, -distance, target_height + 0.02)),
+        "back": Vector((0.0, distance, target_height + 0.02)),
+        "left": Vector((-distance, 0.0, target_height + 0.02)),
+        "right": Vector((distance, 0.0, target_height + 0.02)),
+        "three-quarter": Vector(
+            (-distance * 0.76, -distance * 0.76, target_height + 0.12)
+        ),
+    }
+    scene = bpy.context.scene
+    for name, location in views.items():
+        camera.location = location
+        point_at(camera, target)
+        scene.render.filepath = str(output_dir / f"{name}.png")
+        result = bpy.ops.render.render(write_still=True)
+        assert result == {"FINISHED"}, result
+
+
+def render_qa_turnarounds(
+    character_objects: list[bpy.types.Object],
+    spin_ball: bpy.types.Object,
+) -> tuple[Path, Path]:
+    qa_collection = new_collection("SANIC_QA_PRIVATE")
+    scene = bpy.context.scene
+    scene.render.engine = "BLENDER_EEVEE"
+    scene.render.resolution_x = 1024
+    scene.render.resolution_y = 1024
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    scene.render.image_settings.color_depth = "8"
+    scene.render.film_transparent = False
+    scene.view_settings.look = "AgX - Medium High Contrast"
+    if scene.world is None:
+        scene.world = bpy.data.worlds.new("SANIC_QA_World")
+    scene.world.color = (0.035, 0.04, 0.055)
+
+    camera_data = bpy.data.cameras.new("SANIC_QA_Camera")
+    camera_data.type = "ORTHO"
+    camera = bpy.data.objects.new("SANIC_QA_Camera", camera_data)
+    qa_collection.objects.link(camera)
+    scene.camera = camera
+
+    lights: list[bpy.types.Object] = []
+    for name, location, energy, size in (
+        ("SANIC_QA_Key", (-2.2, -2.8, 3.4), 750.0, 2.8),
+        ("SANIC_QA_Fill", (2.5, -1.2, 2.0), 500.0, 2.6),
+        ("SANIC_QA_Rim", (0.0, 2.5, 2.8), 900.0, 2.2),
+    ):
+        light_data = bpy.data.lights.new(name, "AREA")
+        light_data.energy = energy
+        light_data.shape = "DISK"
+        light_data.size = size
+        light = bpy.data.objects.new(name, light_data)
+        light.location = location
+        qa_collection.objects.link(light)
+        lights.append(light)
+
+    bpy.ops.mesh.primitive_plane_add(size=4.0, location=(0.0, 0.0, -0.002))
+    ground = bpy.context.object
+    ground.name = "SANIC_QA_Ground"
+    move_to_collection(ground, qa_collection)
+    ground_material = material(
+        "SANIC_MAT_QAGround",
+        (0.075, 0.085, 0.11, 1.0),
+        roughness=0.78,
+    )
+    ground.data.materials.append(ground_material)
+
+    character_dir = OUTPUT_DIR / "corrected-turnaround"
+    spin_dir = OUTPUT_DIR / "spin-ball-turnaround"
+    render_turnaround_set(
+        camera=camera,
+        ground=ground,
+        lights=lights,
+        visible=character_objects,
+        hidden=[spin_ball],
+        output_dir=character_dir,
+        target_height=0.85,
+        ortho_scale=2.15,
+        ground_height=-0.002,
+        distance=4.2,
+    )
+    render_turnaround_set(
+        camera=camera,
+        ground=ground,
+        lights=lights,
+        visible=[spin_ball],
+        hidden=character_objects,
+        output_dir=spin_dir,
+        target_height=0.0,
+        ortho_scale=0.95,
+        ground_height=-0.5,
+        distance=2.0,
+    )
+
+    for obj in character_objects:
+        obj.hide_render = False
+        obj.hide_set(False)
+    spin_ball.hide_render = False
+    spin_ball.hide_set(False)
+    qa_objects = list(qa_collection.objects)
+    object_data = [obj.data for obj in qa_objects if obj.data is not None]
+    for obj in qa_objects:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    bpy.data.collections.remove(qa_collection)
+    for datablock in object_data:
+        if datablock.users != 0:
+            continue
+        if isinstance(datablock, bpy.types.Mesh):
+            bpy.data.meshes.remove(datablock)
+        elif isinstance(datablock, bpy.types.Camera):
+            bpy.data.cameras.remove(datablock)
+        elif isinstance(datablock, bpy.types.Light):
+            bpy.data.lights.remove(datablock)
+    if ground_material.users == 0:
+        bpy.data.materials.remove(ground_material)
+    return character_dir, spin_dir
+
+
 def export_selected(
     objects: list[bpy.types.Object],
     path: Path,
@@ -685,6 +835,10 @@ def main() -> None:
     character_objects = [body, *gloves, *face_overlays]
     export_selected(character_objects, CHARACTER_GLB)
     export_selected([spin_ball], SPIN_GLB, tangents=False)
+    character_turnaround, spin_turnaround = render_qa_turnarounds(
+        character_objects,
+        spin_ball,
+    )
     bpy.ops.wm.save_as_mainfile(filepath=str(BLEND_PATH), check_existing=False)
 
     minimum, maximum = object_bounds(body)
@@ -695,6 +849,8 @@ def main() -> None:
             "blend": str(BLEND_PATH),
             "character_glb": str(CHARACTER_GLB),
             "spin_glb": str(SPIN_GLB),
+            "character_turnaround": str(character_turnaround),
+            "spin_turnaround": str(spin_turnaround),
             "body_dimensions": tuple(round(value, 6) for value in maximum - minimum),
             "character_objects": [obj.name for obj in character_objects],
         },
