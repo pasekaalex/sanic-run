@@ -180,6 +180,14 @@ test('uses a pixel UI shell without pixelating the WebGL game', async ({ page })
   expect(styles.pixelFontLoaded).toBe(true);
 });
 
+test('loads every production GLB category without a silent fallback', async ({ page }) => {
+  await page.goto('/?seed=7&e2e=1');
+  const canvas = page.locator('#game-canvas');
+  for (const category of ['character', 'spin-ball', 'ring', 'forest']) {
+    await expect(canvas).toHaveAttribute(`data-${category}-asset`, 'glb');
+  }
+});
+
 test('runs an original animated 16-bit attract mode with a meme reel', async ({ page }) => {
   await page.goto('/?seed=7&e2e=1');
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'intro');
@@ -420,12 +428,35 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
   await beginRun(page);
   await page.getByRole('button', { name: 'Mute sound' }).click();
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('game-canvas');
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
+    const pause = document.querySelector<HTMLButtonElement>('[data-action="pause"]');
+    if (canvas === null || pause === null) {
+      reject(new Error('Missing game canvas or pause control'));
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      observer.disconnect();
+      reject(new Error('Jump presentation never reached spin'));
+    }, 5_000);
+    const pauseOnSpin = (): void => {
+      if (canvas.dataset.presentation !== 'spin') return;
+      window.clearTimeout(timeout);
+      observer.disconnect();
+      pause.click();
+      resolve();
+    };
+    const observer = new MutationObserver(pauseOnSpin);
+    observer.observe(canvas, { attributes: true, attributeFilter: ['data-presentation'] });
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space' }));
+    pauseOnSpin();
+  }));
+  await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-presentation', 'character');
+  await expect(page.locator('#game-canvas')).toHaveAttribute('data-game-phase', 'paused');
+  await page.getByRole('button', { name: 'Resume' }).click();
   await page.keyboard.press('ArrowLeft');
   await expect(page.locator('#app-ui')).toHaveAttribute('data-player-lane', '-1');
-  await page.keyboard.press('Space');
-  await page.getByRole('button', { name: 'Pause' }).click();
-  await expect(page.getByRole('dialog', { name: 'Paused' })).toBeVisible();
-  await page.getByRole('button', { name: 'Resume' }).click();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
   await expect(page.getByRole('dialog', { name: 'Run complete' })).toBeVisible();
   await page.getByRole('button', { name: 'RUN IT BACK' }).click();

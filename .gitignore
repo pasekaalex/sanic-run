@@ -10,6 +10,7 @@ dist/
 test-results/
 playwright-report/
 .playwright-cli/
+output/
 *.blend1
 *.blend2
 .DS_Store

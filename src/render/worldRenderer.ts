@@ -2,6 +2,7 @@ import {
   ACESFilmicToneMapping,
   AnimationAction,
   AnimationMixer,
+  Box3,
   BoxGeometry,
   BufferGeometry,
   Color,
@@ -45,7 +46,10 @@ import {
   characterActionFor,
   interpolateJumpProgress,
   jumpClipTime,
+  jumpPresentation,
 } from './animationTiming';
+import { uniformScaleForHeight } from './modelScale';
+import { nextSpinRotation } from './spinPresentation';
 
 export interface WorldRendererOptions {
   readonly onContextLost?: () => void;
@@ -74,6 +78,8 @@ interface Particle {
 const ZERO = new Vector3();
 const IDENTITY_QUATERNION = new Quaternion();
 const UNIT_SCALE = new Vector3(1, 1, 1);
+const CHARACTER_WORLD_HEIGHT = 4.12;
+const SPIN_BALL_WORLD_DIAMETER = 1.815;
 const REQUIRED_POOL_CAPACITIES = Object.freeze({
   rings: 180,
   trees: 120,
@@ -250,6 +256,7 @@ export class WorldRenderer {
   private readonly instances = new Group();
   private readonly particles = new Group();
   private readonly character: Group;
+  private readonly spinBall: Object3D;
   private readonly mixer: AnimationMixer;
   private readonly actions = new Map<CharacterActionName, AnimationAction>();
   private readonly ringTemplate: InstancedTemplate;
@@ -271,6 +278,7 @@ export class WorldRenderer {
   private cameraBank = 0;
   private lastFrameTime = performance.now();
   private lastDustAt = 0;
+  private spinRotation = 0;
 
   private readonly handleResize = (): void => this.resize();
   private readonly handleContextLost = (event: Event): void => {
@@ -319,7 +327,11 @@ export class WorldRenderer {
 
     this.character = assets.character;
     this.character.name ||= 'SANIC_Character';
-    this.character.scale.setScalar(0.57);
+    const characterBounds = new Box3().setFromObject(this.character);
+    const characterHeight = characterBounds.max.y - characterBounds.min.y;
+    this.character.scale.multiplyScalar(
+      uniformScaleForHeight(characterHeight, CHARACTER_WORLD_HEIGHT),
+    );
     this.character.rotation.y = Math.PI;
     this.character.traverse((object) => {
       const mesh = object as Mesh;
@@ -327,7 +339,23 @@ export class WorldRenderer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     });
-    this.world.add(this.character);
+    this.spinBall = assets.spinBall;
+    this.spinBall.name ||= 'SANIC_SpinBall';
+    const spinBounds = new Box3().setFromObject(this.spinBall);
+    const spinSize = spinBounds.getSize(new Vector3());
+    const spinMaximumDimension = Math.max(spinSize.x, spinSize.y, spinSize.z);
+    this.spinBall.scale.multiplyScalar(
+      uniformScaleForHeight(spinMaximumDimension, SPIN_BALL_WORLD_DIAMETER),
+    );
+    this.spinBall.rotation.y = Math.PI;
+    this.spinBall.visible = false;
+    this.spinBall.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+    });
+    this.world.add(this.character, this.spinBall);
     this.mixer = new AnimationMixer(this.character);
     for (const name of CHARACTER_ACTION_NAMES) {
       const clip = assets.animations.find((candidate) => candidate.name === name);
@@ -402,7 +430,28 @@ export class WorldRenderer {
     );
 
     this.character.position.set(playerX, playerY, 0);
+    this.spinBall.position.set(playerX, playerY + 1.45, 0);
     this.updateAnimation(current, jumpProgress, dt);
+    const showSpin = current.phase === 'playing'
+      && jumpPresentation(jumpProgress) === 'spin';
+    this.canvas.dataset.presentation = showSpin ? 'spin' : 'character';
+    this.canvas.dataset.jumpProgress = jumpProgress === null
+      ? 'none'
+      : jumpProgress.toFixed(3);
+    this.canvas.dataset.gamePhase = current.phase;
+    this.spinRotation = nextSpinRotation(
+      this.spinRotation,
+      showSpin,
+      current.speed,
+      dt,
+    );
+    if (showSpin) {
+      this.character.visible = false;
+      this.spinBall.visible = true;
+      this.spinBall.rotation.x = this.spinRotation;
+    } else {
+      this.resetSpinPresentation();
+    }
     this.updateRings(current, distance);
     this.updateObstacles(current, distance);
     this.updateScenery(distance);
@@ -790,6 +839,14 @@ export class WorldRenderer {
     }
     this.currentActionName = null;
     this.actions.forEach((action) => action.stop());
+    this.resetSpinPresentation();
+  }
+
+  private resetSpinPresentation(): void {
+    this.spinRotation = 0;
+    this.spinBall.rotation.x = 0;
+    this.spinBall.visible = false;
+    this.character.visible = true;
   }
 
   private markTexturesDirty(): void {

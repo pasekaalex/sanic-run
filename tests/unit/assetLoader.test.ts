@@ -40,7 +40,7 @@ const ringGltf = (): GltfLike => {
 
 const spinBallGltf = (): GltfLike => {
   const scene = new Group();
-  scene.add(renderableGroup('SANIC_SpinBall'));
+  scene.add(mesh('SANIC_SpinBall'));
   return { scene, animations: [] };
 };
 

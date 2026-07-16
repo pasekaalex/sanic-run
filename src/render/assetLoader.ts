@@ -1,4 +1,8 @@
 import { AnimationClip, Group, type Object3D } from 'three';
+import {
+  DRACO_GLTF_CONFIG,
+  DRACOLoader,
+} from 'three/addons/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ASSET_URLS } from '../config';
 import {
@@ -123,9 +127,18 @@ const selectForest = (gltf: GltfLike | undefined): {
 
 export class AssetLoader {
   private readonly loader: LoaderLike;
+  private readonly dracoLoader: DRACOLoader | null;
 
-  constructor(loader: LoaderLike = new GLTFLoader()) {
-    this.loader = loader;
+  constructor(loader?: LoaderLike) {
+    if (loader) {
+      this.loader = loader;
+      this.dracoLoader = null;
+      return;
+    }
+    this.dracoLoader = new DRACOLoader()
+      .setDecoderPath(DRACO_GLTF_CONFIG)
+      .setWorkerLimit(2);
+    this.loader = new GLTFLoader().setDRACOLoader(this.dracoLoader);
   }
 
   async load(onProgress: ProgressCallback = () => undefined): Promise<LoadedAssets> {
@@ -174,6 +187,7 @@ export class AssetLoader {
     };
 
     const [characterGltf, spinBallGltf, ringGltf, forestGltf] = await Promise.all(categories.map(loadCategory));
+    this.dracoLoader?.dispose();
     const character = selectCharacter(characterGltf);
     const spinBall = selectSpinBall(spinBallGltf);
     const ring = selectRing(ringGltf);

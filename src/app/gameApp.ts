@@ -152,6 +152,11 @@ export class GameApp {
       });
       if (this.destroyed || initializationId !== this.initializationId) return;
 
+      this.canvas.dataset.characterAsset = assets.fallback.character ? 'fallback' : 'glb';
+      this.canvas.dataset.spinBallAsset = assets.fallback.spinBall ? 'fallback' : 'glb';
+      this.canvas.dataset.ringAsset = assets.fallback.ring ? 'fallback' : 'glb';
+      this.canvas.dataset.forestAsset = assets.fallback.forest ? 'fallback' : 'glb';
+
       this.renderer = new WorldRenderer(this.canvas, assets, {
         onContextLost: this.handleContextLost,
         onContextRestored: this.handleContextRestored,
@@ -206,6 +211,7 @@ export class GameApp {
     this.simulation.pause();
     this.phase = 'paused';
     this.syncSnapshots();
+    this.renderer?.render(this.previousSnapshot, this.currentSnapshot, 1);
     this.audio.suspend();
     this.ui.showPaused(this.currentSnapshot);
   }

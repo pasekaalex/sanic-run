@@ -15,11 +15,15 @@ const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
   readonly headers: readonly HeaderRule[];
 };
 
-const cacheControlFor = (source: string): string | undefined => (
+const headerValueFor = (source: string, key: string): string | undefined => (
   config.headers
     .find((rule) => rule.source === source)
-    ?.headers.find((header) => header.key.toLowerCase() === 'cache-control')
+    ?.headers.find((header) => header.key.toLowerCase() === key.toLowerCase())
     ?.value
+);
+
+const cacheControlFor = (source: string): string | undefined => (
+  headerValueFor(source, 'cache-control')
 );
 
 describe('Vercel cache policy', () => {
@@ -32,5 +36,20 @@ describe('Vercel cache policy', () => {
 
   it('keeps content-hashed build assets immutable', () => {
     expect(cacheControlFor('/assets/(.*)')).toBe('public, max-age=31536000, immutable');
+  });
+});
+
+describe('Vercel content security policy', () => {
+  it('permits bundled Draco WASM and blob workers without broad unsafe eval', () => {
+    const policy = headerValueFor('/(.*)', 'content-security-policy');
+    expect(policy).toBeDefined();
+    const directives = new Map(policy!.split(';').map((directive) => {
+      const [name, ...values] = directive.trim().split(/\s+/);
+      return [name, values] as const;
+    }));
+
+    expect(directives.get('script-src')).toContain("'wasm-unsafe-eval'");
+    expect(directives.get('script-src')).not.toContain("'unsafe-eval'");
+    expect(directives.get('worker-src')).toEqual(["'self'", 'blob:']);
   });
 });
