@@ -29,6 +29,7 @@ OUTPUT_DIR = Path(
 ).expanduser().resolve()
 BLEND_PATH = OUTPUT_DIR / "SANIC-meshy6-v1-corrected.blend"
 CHARACTER_GLB = OUTPUT_DIR / "SANIC-meshy6-v1-corrected.glb"
+SPIN_GLB = OUTPUT_DIR / "SANIC-spin-ball-v1.glb"
 
 TARGET_HEIGHT = 1.70
 RAW_COLLECTION_NAME = "SANIC_RAW_PRIVATE"
@@ -304,6 +305,23 @@ def conform_to_surface(
     obj.select_set(False)
 
 
+def normalize_material_slots(
+    obj: bpy.types.Object,
+    ordered_materials: tuple[bpy.types.Material, ...],
+) -> None:
+    old_materials = list(obj.data.materials)
+    material_indices = {material.name: index for index, material in enumerate(ordered_materials)}
+    assignments = []
+    for polygon in obj.data.polygons:
+        source = old_materials[polygon.material_index]
+        assignments.append(material_indices[source.name])
+    obj.data.materials.clear()
+    for mat in ordered_materials:
+        obj.data.materials.append(mat)
+    for polygon, assignment in zip(obj.data.polygons, assignments, strict=True):
+        polygon.material_index = assignment
+
+
 def cuff_anchor(body: bpy.types.Object, side: str) -> Vector:
     sign = -1.0 if side == "L" else 1.0
     points = [body.matrix_world @ vertex.co for vertex in body.data.vertices]
@@ -470,7 +488,110 @@ def build_sleepy_face_overlays(
     return overlays
 
 
-def export_selected(objects: list[bpy.types.Object], path: Path) -> None:
+def build_spin_ball(
+    collection: bpy.types.Collection,
+    blue: bpy.types.Material,
+    red: bpy.types.Material,
+    white: bpy.types.Material,
+) -> bpy.types.Object:
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        segments=32,
+        ring_count=20,
+        radius=0.31,
+        location=(0.0, 0.0, 0.0),
+    )
+    core = bpy.context.object
+    core.name = "SANIC_SpinCore"
+    finish_mesh(core, blue, collection)
+    parts = [core]
+
+    quill_angles = (15.0, 65.0, 115.0, 165.0, 215.0, 265.0, 315.0)
+    for index, angle_degrees in enumerate(quill_angles, start=1):
+        angle = math.radians(angle_degrees)
+        radial = Vector((math.cos(angle), 0.0, math.sin(angle)))
+        tangent = Vector((-math.sin(angle), 0.0, math.cos(angle)))
+        direction = (
+            radial * 0.76
+            + tangent * 0.42
+            + Vector((0.0, 0.34, 0.0))
+        ).normalized()
+        location = radial * 0.20 + Vector((0.0, 0.055, 0.0))
+        bpy.ops.mesh.primitive_cone_add(
+            vertices=12,
+            radius1=0.112,
+            radius2=0.014,
+            depth=0.40,
+            location=location,
+        )
+        quill = bpy.context.object
+        quill.name = f"SANIC_SpinQuill.{index:02d}"
+        quill.rotation_mode = "QUATERNION"
+        quill.rotation_quaternion = direction.to_track_quat("Z", "Y")
+        finish_mesh(quill, blue, collection)
+        parts.append(quill)
+
+    for name, mat, location, scale, rotation in (
+        (
+            "SANIC_SpinShoeFlash.L",
+            red,
+            Vector((-0.19, -0.20, -0.10)),
+            (0.12, 0.055, 0.072),
+            (0.0, math.radians(20.0), math.radians(-18.0)),
+        ),
+        (
+            "SANIC_SpinShoeFlash.R",
+            red,
+            Vector((0.19, 0.17, 0.09)),
+            (0.12, 0.055, 0.072),
+            (0.0, math.radians(-20.0), math.radians(18.0)),
+        ),
+        (
+            "SANIC_SpinGloveFlash.L",
+            white,
+            Vector((-0.22, 0.05, 0.13)),
+            (0.075, 0.042, 0.060),
+            (math.radians(18.0), 0.0, math.radians(-28.0)),
+        ),
+        (
+            "SANIC_SpinGloveFlash.R",
+            white,
+            Vector((0.22, -0.06, -0.13)),
+            (0.075, 0.042, 0.060),
+            (math.radians(-18.0), 0.0, math.radians(28.0)),
+        ),
+    ):
+        flash = ellipsoid(
+            name,
+            location,
+            scale,
+            mat,
+            collection,
+            segments=16,
+            rings=10,
+        )
+        flash.rotation_euler = rotation
+        parts.append(flash)
+
+    spin_ball = join_objects(parts, "SANIC_SpinBall", collection)
+    spin_ball.data.name = "SANIC_SpinBall_Mesh"
+    normalize_material_slots(spin_ball, (blue, red, white))
+    bpy.ops.object.select_all(action="DESELECT")
+    spin_ball.select_set(True)
+    bpy.context.view_layer.objects.active = spin_ball
+    bpy.ops.object.origin_set(type="ORIGIN_GEOMETRY", center="BOUNDS")
+    spin_ball.location = (0.0, 0.0, 0.0)
+    spin_ball["sanic_role"] = "jump-spin-presentation"
+    spin_ball["sanic_rotation_axis"] = "X"
+    spin_ball.select_set(False)
+    return spin_ball
+
+
+def export_selected(
+    objects: list[bpy.types.Object],
+    path: Path,
+    *,
+    tangents: bool = True,
+) -> None:
     bpy.ops.object.select_all(action="DESELECT")
     for obj in objects:
         obj.hide_set(False)
@@ -484,7 +605,7 @@ def export_selected(objects: list[bpy.types.Object], path: Path) -> None:
         use_selection=True,
         export_animations=False,
         export_materials="EXPORT",
-        export_tangents=True,
+        export_tangents=tangents,
         export_yup=True,
         export_cameras=False,
         export_lights=False,
@@ -497,7 +618,7 @@ def main() -> None:
     reset_scene()
     raw_collection = new_collection(RAW_COLLECTION_NAME)
     character_collection = new_collection(CHARACTER_COLLECTION_NAME)
-    new_collection(SPIN_COLLECTION_NAME)
+    spin_collection = new_collection(SPIN_COLLECTION_NAME)
 
     raw = import_private_source(raw_collection)
     body = duplicate_working_body(raw, character_collection)
@@ -513,6 +634,21 @@ def main() -> None:
         "SANIC_MAT_CorrectedBrow",
         (0.004, 0.006, 0.012, 1.0),
         roughness=0.52,
+    )
+    spin_blue = material(
+        "SANIC_MAT_SpinBlue",
+        (0.018, 0.055, 0.74, 1.0),
+        roughness=0.34,
+    )
+    spin_red = material(
+        "SANIC_MAT_SpinRed",
+        (0.82, 0.015, 0.022, 1.0),
+        roughness=0.30,
+    )
+    spin_white = material(
+        "SANIC_MAT_SpinWhite",
+        (0.95, 0.97, 1.0, 1.0),
+        roughness=0.43,
     )
 
     hand_length = TARGET_HEIGHT * 0.105
@@ -531,6 +667,12 @@ def main() -> None:
         dark,
         character_collection,
     )
+    spin_ball = build_spin_ball(
+        spin_collection,
+        spin_blue,
+        spin_red,
+        spin_white,
+    )
 
     raw_layer = find_layer_collection(
         bpy.context.view_layer.layer_collection,
@@ -542,6 +684,7 @@ def main() -> None:
     bpy.ops.wm.save_as_mainfile(filepath=str(BLEND_PATH), check_existing=False)
     character_objects = [body, *gloves, *face_overlays]
     export_selected(character_objects, CHARACTER_GLB)
+    export_selected([spin_ball], SPIN_GLB, tangents=False)
     bpy.ops.wm.save_as_mainfile(filepath=str(BLEND_PATH), check_existing=False)
 
     minimum, maximum = object_bounds(body)
@@ -551,6 +694,7 @@ def main() -> None:
             "source": str(SOURCE),
             "blend": str(BLEND_PATH),
             "character_glb": str(CHARACTER_GLB),
+            "spin_glb": str(SPIN_GLB),
             "body_dimensions": tuple(round(value, 6) for value in maximum - minimum),
             "character_objects": [obj.name for obj in character_objects],
         },

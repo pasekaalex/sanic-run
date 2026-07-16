@@ -186,8 +186,8 @@ def validate_spin_ball(asset_path: Path) -> dict[str, object]:
     dimensions = maximum - minimum
     maximum_dimension = max(dimensions)
     triangles = triangle_count(objects)
-    assert 0.55 <= maximum_dimension <= 0.85, (
-        f"Spin-ball maximum dimension must be 0.55-0.85 m, got {maximum_dimension:.6f}"
+    assert 0.72 <= maximum_dimension <= 0.85, (
+        f"Spin-ball maximum dimension must be 0.72-0.85 m, got {maximum_dimension:.6f}"
     )
     assert triangles <= 8_000, f"Spin-ball exceeds 8000 triangles: {triangles}"
     assert len(objects[0].data.materials) <= 3, (
