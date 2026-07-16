@@ -279,9 +279,9 @@ def validate_common(mode: str) -> dict[str, object]:
     oversized_images = {
         image.name: tuple(image.size)
         for image in bpy.data.images
-        if image.size[0] > 2048 or image.size[1] > 2048
+        if image.size[0] > 1024 or image.size[1] > 1024
     }
-    assert not oversized_images, f"Web textures exceed 2048: {oversized_images}"
+    assert not oversized_images, f"Web textures exceed 1024: {oversized_images}"
     run = validate_run_cycle(rig)
     return {
         "mode": mode,

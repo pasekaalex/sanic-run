@@ -498,7 +498,7 @@ def build_spin_ball(
     bpy.ops.mesh.primitive_uv_sphere_add(
         segments=32,
         ring_count=20,
-        radius=0.31,
+        radius=0.265,
         location=(0.0, 0.0, 0.0),
     )
     core = bpy.context.object
@@ -506,72 +506,119 @@ def build_spin_ball(
     finish_mesh(core, blue, collection)
     parts = [core]
 
-    quill_angles = (15.0, 65.0, 115.0, 165.0, 215.0, 265.0, 315.0)
-    for index, angle_degrees in enumerate(quill_angles, start=1):
-        angle = math.radians(angle_degrees)
-        radial = Vector((math.cos(angle), 0.0, math.sin(angle)))
-        tangent = Vector((-math.sin(angle), 0.0, math.cos(angle)))
-        direction = (
-            radial * 0.76
-            + tangent * 0.42
-            + Vector((0.0, 0.34, 0.0))
-        ).normalized()
-        location = radial * 0.20 + Vector((0.0, 0.055, 0.0))
-        bpy.ops.mesh.primitive_cone_add(
-            vertices=12,
-            radius1=0.112,
-            radius2=0.014,
-            depth=0.40,
-            location=location,
-        )
-        quill = bpy.context.object
-        quill.name = f"SANIC_SpinQuill.{index:02d}"
-        quill.rotation_mode = "QUATERNION"
-        quill.rotation_quaternion = direction.to_track_quat("Z", "Y")
-        finish_mesh(quill, blue, collection)
-        parts.append(quill)
+    quill_index = 0
 
-    for name, mat, location, scale, rotation in (
-        (
-            "SANIC_SpinShoeFlash.L",
-            red,
-            Vector((-0.19, -0.20, -0.10)),
-            (0.12, 0.055, 0.072),
-            (0.0, math.radians(20.0), math.radians(-18.0)),
-        ),
-        (
-            "SANIC_SpinShoeFlash.R",
-            red,
-            Vector((0.19, 0.17, 0.09)),
-            (0.12, 0.055, 0.072),
-            (0.0, math.radians(-20.0), math.radians(18.0)),
-        ),
-        (
-            "SANIC_SpinGloveFlash.L",
-            white,
-            Vector((-0.22, 0.05, 0.13)),
-            (0.075, 0.042, 0.060),
-            (math.radians(18.0), 0.0, math.radians(-28.0)),
-        ),
-        (
-            "SANIC_SpinGloveFlash.R",
-            white,
-            Vector((0.22, -0.06, -0.13)),
-            (0.075, 0.042, 0.060),
-            (math.radians(-18.0), 0.0, math.radians(28.0)),
-        ),
-    ):
-        flash = ellipsoid(
+    def swept_ring(
+        *,
+        count: int,
+        phase: float,
+        plane: str,
+    ) -> None:
+        nonlocal quill_index
+        for ring_index in range(count):
+            angle = phase + ring_index * math.tau / count
+            if plane == "XZ":
+                radial = Vector((math.cos(angle), 0.0, math.sin(angle)))
+                tangent = Vector((-math.sin(angle), 0.0, math.cos(angle)))
+                thickness_axis = 1
+                depth_offset = Vector((0.0, -0.018 if ring_index % 2 else 0.018, 0.0))
+            else:
+                radial = Vector((math.cos(angle), math.sin(angle), 0.0))
+                tangent = Vector((-math.sin(angle), math.cos(angle), 0.0))
+                thickness_axis = 2
+                depth_offset = Vector((0.0, 0.0, -0.018 if ring_index % 2 else 0.018))
+            direction = (radial * 0.38 + tangent * 0.925).normalized()
+            location = radial * 0.215 + depth_offset
+            bpy.ops.mesh.primitive_cone_add(
+                vertices=8,
+                radius1=0.074,
+                radius2=0.006,
+                depth=0.40,
+                location=location,
+            )
+            quill = bpy.context.object
+            quill_index += 1
+            quill.name = f"SANIC_SpinQuill.{quill_index:02d}"
+            quill.rotation_mode = "QUATERNION"
+            quill.rotation_quaternion = direction.to_track_quat("Z", "Y")
+            finish_mesh(quill, blue, collection)
+            bpy.ops.object.select_all(action="DESELECT")
+            quill.select_set(True)
+            bpy.context.view_layer.objects.active = quill
+            bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+            for vertex in quill.data.vertices:
+                vertex.co[thickness_axis] *= 0.38
+            parts.append(quill)
+
+    # Two swept rings trade silhouette duty while the object rotates around X,
+    # creating a curled pinwheel instead of a radial blowfish shape.
+    swept_ring(count=8, phase=math.radians(8.0), plane="XZ")
+    swept_ring(count=6, phase=math.radians(24.0), plane="XY")
+
+    def surface_streak(
+        name: str,
+        mat: bpy.types.Material,
+        angle_degrees: float,
+        surface_y: float,
+        angular_width: float,
+        radius: float,
+        thickness: float,
+    ) -> bpy.types.Object:
+        angle = math.radians(angle_degrees)
+        half = math.radians(angular_width) * 0.5
+        start = Vector(
+            (radius * math.cos(angle - half), surface_y, radius * math.sin(angle - half))
+        )
+        finish = Vector(
+            (radius * math.cos(angle + half), surface_y, radius * math.sin(angle + half))
+        )
+        return capsule_between(
             name,
-            location,
-            scale,
+            start,
+            finish,
+            thickness,
             mat,
             collection,
             segments=16,
-            rings=10,
         )
-        flash.rotation_euler = rotation
-        parts.append(flash)
+
+    for front_sign, suffix, shoe_angle, glove_angle in (
+        (-1.0, "Front", 226.0, 58.0),
+        (1.0, "Back", 46.0, 238.0),
+    ):
+        parts.append(
+            surface_streak(
+                f"SANIC_SpinShoeFlash.{suffix}",
+                red,
+                shoe_angle,
+                front_sign * 0.180,
+                58.0,
+                0.200,
+                0.042,
+            )
+        )
+        parts.append(
+            surface_streak(
+                f"SANIC_SpinSoleFlash.{suffix}",
+                white,
+                shoe_angle + 2.0,
+                front_sign * 0.188,
+                36.0,
+                0.204,
+                0.018,
+            )
+        )
+        parts.append(
+            surface_streak(
+                f"SANIC_SpinGloveFlash.{suffix}",
+                white,
+                glove_angle,
+                front_sign * 0.184,
+                38.0,
+                0.195,
+                0.027,
+            )
+        )
 
     spin_ball = join_objects(parts, "SANIC_SpinBall", collection)
     spin_ball.data.name = "SANIC_SpinBall_Mesh"
@@ -579,6 +626,8 @@ def build_spin_ball(
     bpy.ops.object.select_all(action="DESELECT")
     spin_ball.select_set(True)
     bpy.context.view_layer.objects.active = spin_ball
+    spin_ball.scale = (1.06, 1.06, 1.06)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     bpy.ops.object.origin_set(type="ORIGIN_GEOMETRY", center="BOUNDS")
     spin_ball.location = (0.0, 0.0, 0.0)
     spin_ball["sanic_role"] = "jump-spin-presentation"

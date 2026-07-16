@@ -585,7 +585,7 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
     return {action.name: action for action in (idle, run, jump, crash)}
 
 
-def downsize_web_images(maximum_dimension: int = 2048) -> dict[str, tuple[int, int]]:
+def downsize_web_images(maximum_dimension: int = 1024) -> dict[str, tuple[int, int]]:
     resized: dict[str, tuple[int, int]] = {}
     for image in bpy.data.images:
         width, height = image.size
