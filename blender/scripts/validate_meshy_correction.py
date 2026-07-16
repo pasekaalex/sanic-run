@@ -22,6 +22,7 @@ from pathlib import Path
 
 import bpy
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 
 EXPECTED_CORRECTED = {
@@ -141,6 +142,25 @@ def validate_character(asset_path: Path) -> dict[str, object]:
         glove = bpy.data.objects[f"SANIC_Glove.{side}"]
         assert len(glove.data.polygons) >= 500, (
             f"SANIC_Glove.{side} lacks modeled digit detail"
+        )
+
+    body = bpy.data.objects["SANIC_BodyBase"]
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    body_tree = BVHTree.FromObject(body, depsgraph)
+    assert body_tree is not None
+    for name in sorted(EXPECTED_CORRECTED):
+        if not name.startswith("SANIC_Face_"):
+            continue
+        overlay = bpy.data.objects[name]
+        center = sum(
+            (overlay.matrix_world @ Vector(corner) for corner in overlay.bound_box),
+            Vector(),
+        ) / 8.0
+        nearest = body_tree.find_nearest(center)
+        assert nearest is not None
+        distance = nearest[3]
+        assert distance <= 0.018, (
+            f"{name} floats {distance:.6f} m from the face surface"
         )
 
     return {
