@@ -1,6 +1,8 @@
 import '@fontsource/bangers/400.css';
+import '@fontsource/press-start-2p/latin-400.css';
 import '@fontsource/space-mono/400.css';
 import './styles.css';
+import './pixel-ui.css';
 
 import { GameApp } from './app/gameApp';
 

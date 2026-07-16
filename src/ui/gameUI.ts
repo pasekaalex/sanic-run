@@ -71,6 +71,7 @@ export class GameUI {
     private readonly root: HTMLElement,
     private readonly actions: UIActions,
   ) {
+    root.dataset.uiTheme = 'pixel-16';
     root.replaceChildren();
     root.innerHTML = `
       <header class="topbar" aria-label="$SANIC quick links">
@@ -78,6 +79,21 @@ export class GameUI {
         ${contractMarkup('contract--desktop')}
         <nav class="topbar__links" aria-label="Project links">${linkMarkup()}</nav>
       </header>
+
+      <div class="attract-stage" data-attract-stage aria-hidden="true">
+        <span class="attract-stage__cloud attract-stage__cloud--one"></span>
+        <span class="attract-stage__cloud attract-stage__cloud--two"></span>
+        <div class="attract-stage__hills">
+          <span class="pixel-hill pixel-hill--back"></span>
+          <span class="pixel-hill pixel-hill--front"></span>
+        </div>
+        <div class="attract-stage__grid"></div>
+        <span class="pixel-ring pixel-ring--one"></span>
+        <span class="pixel-ring pixel-ring--two"></span>
+        <span class="pixel-ring pixel-ring--three"></span>
+        <span class="pixel-ring pixel-ring--four"></span>
+        <div class="attract-stage__checker"></div>
+      </div>
 
       <section class="loading-card" data-view="loading" aria-labelledby="loading-title">
         <p class="kicker">RUNNING UP THE TRENCHES</p>
@@ -90,6 +106,20 @@ export class GameUI {
         <p class="kicker">${BRAND.tagline}</p>
         <h1 id="intro-title">${BRAND.name}</h1>
         <p class="context-banner" role="alert" data-context-banner hidden>SANIC HIT A DIMENSIONAL WALL</p>
+        <p class="start-callout" aria-hidden="true"><span>PRESS START</span><b>◆</b><span>GOTTA GO FAST</span></p>
+        <div class="meme-reel" role="group" data-meme-ticker aria-label="$SANIC meme reel">
+          <span class="meme-reel__label" aria-hidden="true">LIVE FROM THE TRENCHES</span>
+          <div class="meme-reel__window">
+            <ul class="meme-reel__track">
+              <li data-meme-line>ANSEM SAID ONE MORE RUN</li>
+              <li data-meme-line>TRENCHES BUILT DIFFERENT</li>
+              <li data-meme-line>I LOVE TO GO FAST</li>
+              <li data-meme-line>SEND IT RESPONSIBLY</li>
+              <li data-meme-line>0 RINGS IS A LIFESTYLE</li>
+              <li data-meme-line>THE CHART NEEDS MORE BLUE</li>
+            </ul>
+          </div>
+        </div>
         <p class="intro-panel__tagline">RUN THE TRENCHES. STACK RINGS.<br><strong>GO FAST.</strong></p>
         <button class="primary-button" type="button" data-action="start">GOTTA GO FAST</button>
         ${contractMarkup('contract--intro')}

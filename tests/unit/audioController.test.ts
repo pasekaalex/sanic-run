@@ -115,13 +115,18 @@ class FakeAudioContext {
   public closeCount = 0;
   public resumeCount = 0;
   public suspendCount = 0;
-  public state: AudioContextState = 'running';
+  public state: AudioContextState;
   private readonly pendingSuspendResolutions: Array<() => void> = [];
 
   public constructor(
     private readonly throwOnWindStart = false,
     private readonly deferSuspend = false,
-  ) {}
+    private readonly throwOnMusicStart = false,
+    private readonly rejectResume = false,
+    initialState: AudioContextState = 'running',
+  ) {
+    this.state = initialState;
+  }
 
   public close(): Promise<void> {
     this.closeCount += 1;
@@ -154,6 +159,9 @@ class FakeAudioContext {
   }
 
   public createOscillator(): FakeOscillatorNode {
+    if (this.throwOnMusicStart && this.oscillators.length === 0) {
+      throw new Error('music oscillator creation failed');
+    }
     const oscillator = new FakeOscillatorNode();
     this.oscillators.push(oscillator);
     return oscillator;
@@ -161,6 +169,7 @@ class FakeAudioContext {
 
   public resume(): Promise<void> {
     this.resumeCount += 1;
+    if (this.rejectResume) return Promise.reject(new Error('resume rejected'));
     this.state = 'running';
     return Promise.resolve();
   }
@@ -212,6 +221,7 @@ const installAudioContext = (context: FakeAudioContext): (() => number) => {
 afterEach(() => {
   restoreAudioContext?.();
   restoreAudioContext = null;
+  vi.useRealTimers();
 });
 
 describe('AudioController', () => {
@@ -232,7 +242,7 @@ describe('AudioController', () => {
     expect(context.oscillators).toHaveLength(0);
   });
 
-  it('starts once and enables synthesized effects', () => {
+  it('starts once and enables melodic music plus synthesized effects', () => {
     const context = new FakeAudioContext();
     const constructions = installAudioContext(context);
     const audio = new AudioController();
@@ -242,10 +252,26 @@ describe('AudioController', () => {
     audio.jump();
 
     expect(constructions()).toBe(1);
-    expect(context.bufferSources).toHaveLength(1);
+    expect(context.bufferSources.length).toBeGreaterThanOrEqual(2);
     expect(context.bufferSources[0]?.started).toBe(1);
-    expect(context.oscillators).toHaveLength(1);
-    expect(context.oscillators[0]?.started).toBe(1);
+    expect(context.oscillators.length).toBeGreaterThanOrEqual(5);
+    expect(context.oscillators.every(({ started }) => started === 1)).toBe(true);
+    audio.destroy();
+  });
+
+  it('routes conservative music and effects buses beneath the capped master', () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    const [master, effects, music] = context.gains;
+
+    expect(master?.connections).toContain(context.destination);
+    expect(effects?.connections).toContain(master);
+    expect(music?.connections).toContain(master);
+    expect(effects?.gain.scheduled.at(-1)?.value).toBeLessThanOrEqual(1);
+    expect(music?.gain.scheduled.at(-1)?.value).toBeLessThan(0.6);
     audio.destroy();
   });
 
@@ -286,6 +312,37 @@ describe('AudioController', () => {
     audio.destroy();
   });
 
+  it('keeps music scheduling quiescent when a suspended context rejects resume', async () => {
+    vi.useFakeTimers();
+    const context = new FakeAudioContext(false, false, false, true, 'suspended');
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(context.resumeCount).toBe(1);
+    expect(context.state).toBe('suspended');
+    expect(vi.getTimerCount()).toBe(0);
+    const frozenCounts = {
+      oscillators: context.oscillators.length,
+      bufferSources: context.bufferSources.length,
+    };
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      audio.pickup(3);
+      audio.jump();
+      audio.lane();
+      audio.impact();
+    }
+    expect({
+      oscillators: context.oscillators.length,
+      bufferSources: context.bufferSources.length,
+    }).toEqual(frozenCounts);
+    audio.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('caps the master gain and ramps mute state only between zero and the cap', () => {
     const context = new FakeAudioContext();
     installAudioContext(context);
@@ -305,6 +362,22 @@ describe('AudioController', () => {
     audio.destroy();
   });
 
+  it('resets music at game over and restarts it from bar one for the next run', () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    const firstPhraseVoices = context.oscillators.length;
+    audio.setIntensity(1);
+    audio.gameOver();
+    audio.restart();
+
+    expect(firstPhraseVoices).toBeGreaterThanOrEqual(4);
+    expect(context.oscillators.length).toBeGreaterThan(firstPhraseVoices);
+    audio.destroy();
+  });
+
   it('stops and disconnects the complete audio graph before closing once', () => {
     const context = new FakeAudioContext();
     installAudioContext(context);
@@ -320,7 +393,9 @@ describe('AudioController', () => {
       context.filters[0]?.disconnected,
       context.gains[0]?.disconnected,
       context.gains[1]?.disconnected,
-    ]).toEqual([true, true, true, true]);
+      context.gains[2]?.disconnected,
+      context.gains[3]?.disconnected,
+    ]).toEqual([true, true, true, true, true, true]);
     expect(context.closeCount).toBe(1);
   });
 
@@ -330,6 +405,7 @@ describe('AudioController', () => {
     const audio = new AudioController();
 
     expect(() => audio.start()).not.toThrow();
+    expect(context.closeCount).toBe(1);
     audio.destroy();
 
     expect(context.bufferSources[0]?.stopped).toBe(1);
@@ -338,7 +414,30 @@ describe('AudioController', () => {
       context.filters[0]?.disconnected,
       context.gains[0]?.disconnected,
       context.gains[1]?.disconnected,
-    ]).toEqual([true, true, true, true]);
+      context.gains[2]?.disconnected,
+      context.gains[3]?.disconnected,
+    ]).toEqual([true, true, true, true, true, true]);
+    expect(context.closeCount).toBe(1);
+  });
+
+  it('cleans wind and every bus when initial music graph creation fails', () => {
+    const context = new FakeAudioContext(false, false, true);
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    expect(() => audio.start()).not.toThrow();
+    expect(context.closeCount).toBe(1);
+    audio.destroy();
+
+    expect(context.bufferSources[0]?.stopped).toBe(1);
+    expect([
+      context.bufferSources[0]?.disconnected,
+      context.filters[0]?.disconnected,
+      context.gains[0]?.disconnected,
+      context.gains[1]?.disconnected,
+      context.gains[2]?.disconnected,
+      context.gains[3]?.disconnected,
+    ]).toEqual([true, true, true, true, true, true]);
     expect(context.closeCount).toBe(1);
   });
 });

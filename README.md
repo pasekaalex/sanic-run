@@ -39,4 +39,4 @@ Web exports live in `public/models/`. Launch art is `public/media/sanic-game-pro
 
 ## Deployment
 
-The canonical repository is `pasekaalex/sanic-run`. Production is hosted by Vercel; `sanic.fun` will become the canonical domain after its Porkbun DNS records are connected and verified.
+The canonical repository is https://github.com/pasekaalex/sanic-run. Production is hosted by Vercel at https://www.sanic.fun.

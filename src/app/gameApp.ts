@@ -1,6 +1,7 @@
 import { BRAND, GAME } from '../config';
 import { GameSimulation, type SpawnSource } from '../game/simulation';
 import type { GameCommand, SimulationSnapshot, SpawnRow } from '../game/types';
+import { jumpStarted } from '../render/animationTiming';
 import { AudioController } from '../platform/audioController';
 import { InputController } from '../platform/inputController';
 import { loadPreferences, savePreferences, type Preferences } from '../platform/storage';
@@ -194,6 +195,7 @@ export class GameApp {
     this.phase = 'playing';
     this.resetClocks();
     this.syncSnapshots();
+    this.syncAudioIntensity(this.currentSnapshot);
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN STARTED');
@@ -227,9 +229,10 @@ export class GameApp {
     this.runId += 1;
     this.simulation.restart(readSeed(this.parameters));
     this.phase = 'playing';
-    this.audio.resume();
+    this.audio.restart();
     this.resetClocks();
     this.syncSnapshots();
+    this.syncAudioIntensity(this.currentSnapshot);
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN RESTARTED');
@@ -322,7 +325,9 @@ export class GameApp {
     const before = this.simulation.snapshot();
     this.simulation.command(command);
     this.currentSnapshot = this.simulation.snapshot();
-    if (command === 'jump' && before.playerY === 0) this.audio.jump();
+    if (command === 'jump' && jumpStarted(before.jumpProgress, this.currentSnapshot.jumpProgress)) {
+      this.audio.jump();
+    }
     if ((command === 'left' || command === 'right') && this.currentSnapshot.lane !== before.lane) {
       this.audio.lane();
     }
@@ -376,6 +381,8 @@ export class GameApp {
     previous: Readonly<SimulationSnapshot>,
     current: Readonly<SimulationSnapshot>,
   ): void {
+    this.syncAudioIntensity(current);
+    if (jumpStarted(previous.jumpProgress, current.jumpProgress)) this.audio.jump();
     if (current.rings > previous.rings) this.audio.pickup(current.multiplier);
     if (previous.phase !== 'gameOver' && current.phase === 'gameOver') this.finishRun(current);
   }
@@ -383,6 +390,7 @@ export class GameApp {
   private finishRun(snapshot: Readonly<SimulationSnapshot>): void {
     this.phase = 'gameOver';
     this.accumulator = 0;
+    this.audio.gameOver();
     this.audio.impact();
     this.renderer?.render(this.previousSnapshot, snapshot, 1);
     this.clearImpactSuspend();
@@ -461,6 +469,12 @@ export class GameApp {
   private syncSnapshots(): void {
     this.currentSnapshot = this.simulation.snapshot();
     this.previousSnapshot = this.currentSnapshot;
+  }
+
+  private syncAudioIntensity(snapshot: Readonly<SimulationSnapshot>): void {
+    const speedRange = GAME.maxSpeed - GAME.startSpeed;
+    const intensity = speedRange > 0 ? (snapshot.speed - GAME.startSpeed) / speedRange : 0;
+    this.audio.setIntensity(intensity);
   }
 
   private resetClocks(): void {

@@ -40,6 +40,12 @@ import {
   type ForestPartName,
   type LoadedAssets,
 } from './assetLoader';
+import {
+  animationCrossfadeSeconds,
+  characterActionFor,
+  interpolateJumpProgress,
+  jumpClipTime,
+} from './animationTiming';
 
 export interface WorldRendererOptions {
   readonly onContextLost?: () => void;
@@ -95,7 +101,7 @@ const geometryComponent = (
   return component;
 };
 
-class InstancedTemplate {
+export class InstancedTemplate {
   readonly capacity: number;
   readonly components: readonly InstancedComponent[];
   private cursor = 0;
@@ -154,7 +160,6 @@ class InstancedTemplate {
     for (const component of this.components) {
       component.mesh.count = this.cursor;
       component.mesh.instanceMatrix.needsUpdate = true;
-      component.mesh.computeBoundingSphere();
     }
   }
 
@@ -390,9 +395,14 @@ export class WorldRenderer {
     const distance = MathUtils.lerp(from.distance, current.distance, blend);
     const playerX = MathUtils.lerp(from.playerX, current.playerX, blend);
     const playerY = MathUtils.lerp(from.playerY, current.playerY, blend);
+    const jumpProgress = interpolateJumpProgress(
+      from.jumpProgress,
+      current.jumpProgress,
+      blend,
+    );
 
     this.character.position.set(playerX, playerY, 0);
-    this.updateAnimation(current, playerY, dt);
+    this.updateAnimation(current, jumpProgress, dt);
     this.updateRings(current, distance);
     this.updateObstacles(current, distance);
     this.updateScenery(distance);
@@ -572,19 +582,30 @@ export class WorldRenderer {
     if (!next) return;
     const current = this.currentActionName ? this.actions.get(this.currentActionName) : undefined;
     next.reset().setEffectiveWeight(1).play();
-    if (current) current.crossFadeTo(next, name === 'Crash' ? 0.08 : 0.16, false);
+    if (current) {
+      current.paused = false;
+      current.crossFadeTo(next, animationCrossfadeSeconds(name), false);
+    }
     else next.fadeIn(0.1);
     this.currentActionName = name;
   }
 
-  private updateAnimation(snapshot: Readonly<SimulationSnapshot>, playerY: number, dt: number): void {
-    let desired: CharacterActionName = 'Idle';
-    if (snapshot.phase === 'gameOver') desired = 'Crash';
-    else if (snapshot.phase === 'playing' && playerY > 0.06) desired = 'Jump';
-    else if (snapshot.phase === 'playing') desired = 'Run';
+  private updateAnimation(
+    snapshot: Readonly<SimulationSnapshot>,
+    jumpProgress: number | null,
+    dt: number,
+  ): void {
+    const desired = characterActionFor(snapshot.phase, jumpProgress);
     this.switchAnimation(desired);
     this.actions.get('Run')?.setEffectiveTimeScale(MathUtils.clamp(snapshot.speed / GAME.startSpeed, 0.85, 1.8));
+
+    const jump = this.actions.get('Jump');
+    if (jump) jump.paused = desired === 'Jump';
     this.mixer.update(Math.min(dt, 0.05));
+    if (desired === 'Jump' && jumpProgress !== null && jump) {
+      jump.time = jumpClipTime(jump.getClip().duration, jumpProgress);
+      this.mixer.update(0);
+    }
   }
 
   private updateRings(snapshot: Readonly<SimulationSnapshot>, distance: number): void {
@@ -643,7 +664,7 @@ export class WorldRenderer {
       const longitudinal = Math.floor(slot / 2);
       const segment = foliageStart + longitudinal;
       const side = slot % 2 === 0 ? -1 : 1;
-      const name: ForestPartName = longitudinal % 2 === 0 ? 'KIT_Grass' : 'KIT_Fern';
+      const name: ForestPartName = segment % 2 === 0 ? 'KIT_Grass' : 'KIT_Fern';
       const x = side * (6.7 + hash01(segment * 23 + side) * 8.7);
       this.placeScenery(name, x, segment * 1.7 - distance, hash01(segment * 29 + side), 0.7, 1.22);
     }
@@ -654,7 +675,7 @@ export class WorldRenderer {
       const longitudinal = Math.floor(slot / 2);
       const segment = detailStart + longitudinal;
       const side = slot % 2 === 0 ? -1 : 1;
-      const name: ForestPartName = longitudinal % 2 === 0 ? 'KIT_Rock' : 'KIT_Mushroom';
+      const name: ForestPartName = segment % 2 === 0 ? 'KIT_Rock' : 'KIT_Mushroom';
       const x = side * (7.1 + hash01(segment * 31 + side) * 7.8);
       this.placeScenery(name, x, segment * 7.5 - distance, hash01(segment * 37 + side), 0.72, 1.25);
     }

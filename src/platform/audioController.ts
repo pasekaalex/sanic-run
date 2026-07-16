@@ -1,4 +1,8 @@
+import { MusicSequencer } from './musicSequencer';
+
 const MASTER_GAIN = 0.16;
+const EFFECTS_GAIN = 0.95;
+const MUSIC_GAIN = 0.52;
 const SILENCE = 0.0001;
 
 interface ToneOptions {
@@ -19,6 +23,9 @@ interface WindGraph {
 export class AudioController {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
+  private effectsBus: GainNode | null = null;
+  private musicBus: GainNode | null = null;
+  private music: MusicSequencer | null = null;
   private wind: WindGraph | null = null;
   private muted: boolean;
   private desiredRunning = false;
@@ -42,23 +49,49 @@ export class AudioController {
 
     let context: AudioContext | null = null;
     let master: GainNode | null = null;
+    let effectsBus: GainNode | null = null;
+    let musicBus: GainNode | null = null;
+    let music: MusicSequencer | null = null;
     let wind: WindGraph | null = null;
 
     try {
       context = new window.AudioContext();
       master = context.createGain();
+      effectsBus = context.createGain();
+      musicBus = context.createGain();
       master.gain.setValueAtTime(this.muted ? 0 : MASTER_GAIN, context.currentTime);
+      effectsBus.gain.setValueAtTime(EFFECTS_GAIN, context.currentTime);
+      musicBus.gain.setValueAtTime(MUSIC_GAIN, context.currentTime);
+      effectsBus.connect(master);
+      musicBus.connect(master);
       master.connect(context.destination);
 
-      wind = this.createWind(context, master);
+      wind = this.createWind(context, effectsBus);
+      music = new MusicSequencer(context, musicBus);
+      music.start();
+      if (context.state !== 'running') music.pause();
       this.context = context;
       this.master = master;
+      this.effectsBus = effectsBus;
+      this.musicBus = musicBus;
+      this.music = music;
       this.wind = wind;
       this.requestStateSync();
     } catch {
+      music?.destroy();
       this.cleanupWind(wind);
+      this.disconnect(musicBus);
+      this.disconnect(effectsBus);
       this.disconnect(master);
       this.closeContext(context);
+      if (this.context === context) {
+        this.context = null;
+        this.master = null;
+        this.effectsBus = null;
+        this.musicBus = null;
+        this.music = null;
+        this.wind = null;
+      }
     }
   }
 
@@ -133,6 +166,7 @@ export class AudioController {
   public suspend(): void {
     if (this.destroyed) return;
     this.desiredRunning = false;
+    this.music?.pause();
     this.requestStateSync();
   }
 
@@ -142,15 +176,38 @@ export class AudioController {
     this.requestStateSync();
   }
 
+  public setIntensity(intensity: number): void {
+    if (this.destroyed) return;
+    this.music?.setIntensity(intensity);
+  }
+
+  public gameOver(): void {
+    if (this.destroyed) return;
+    this.music?.stop(true);
+  }
+
+  public restart(): void {
+    if (this.destroyed) return;
+    this.desiredRunning = true;
+    this.music?.stop(true);
+    this.requestStateSync();
+  }
+
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
 
+    this.music?.destroy();
     this.cleanupWind(this.wind);
+    this.disconnect(this.musicBus);
+    this.disconnect(this.effectsBus);
     this.disconnect(this.master);
 
     const context = this.context;
+    this.music = null;
     this.wind = null;
+    this.musicBus = null;
+    this.effectsBus = null;
     this.master = null;
     this.context = null;
 
@@ -162,9 +219,10 @@ export class AudioController {
     if (this.destroyed || context === null || context.state === 'closed' || this.stateSyncInFlight) return;
 
     const requestedRunning = this.desiredRunning;
+    this.syncMusicTransport(context);
     let transition: Promise<void>;
     try {
-      if (requestedRunning && context.state === 'suspended') {
+      if (requestedRunning && context.state !== 'running') {
         transition = context.resume();
       } else if (!requestedRunning && context.state === 'running') {
         transition = context.suspend();
@@ -179,8 +237,27 @@ export class AudioController {
     void transition.catch(() => undefined).finally(() => {
       if (context !== this.context) return;
       this.stateSyncInFlight = false;
-      if (this.desiredRunning !== requestedRunning) this.requestStateSync();
+      if (this.desiredRunning !== requestedRunning) {
+        this.requestStateSync();
+        return;
+      }
+      this.syncMusicTransport(context);
     });
+  }
+
+  private syncMusicTransport(context: AudioContext): void {
+    const music = this.music;
+    if (music === null) return;
+    if (!this.desiredRunning || context.state !== 'running') {
+      music.pause();
+      return;
+    }
+    try {
+      music.resume();
+    } catch {
+      // Later synthesis failures silence music while effects and gameplay continue.
+      music.stop(false);
+    }
   }
 
   private createWind(context: AudioContext, master: AudioNode): WindGraph {
@@ -205,7 +282,7 @@ export class AudioController {
       filter.type = 'bandpass';
       filter.frequency.setValueAtTime(760, context.currentTime);
       filter.Q.setValueAtTime(0.45, context.currentTime);
-      gain.gain.setValueAtTime(0.055, context.currentTime);
+      gain.gain.setValueAtTime(0.018, context.currentTime);
 
       source.connect(filter);
       filter.connect(gain);
@@ -258,8 +335,14 @@ export class AudioController {
 
   private tone(options: ToneOptions): void {
     const context = this.context;
-    const master = this.master;
-    if (this.destroyed || this.muted || context === null || master === null) return;
+    const effectsBus = this.effectsBus;
+    if (
+      this.destroyed
+      || this.muted
+      || context === null
+      || context.state !== 'running'
+      || effectsBus === null
+    ) return;
 
     const start = context.currentTime + (options.delay ?? 0);
     const attackEnd = start + Math.min(0.012, options.duration * 0.25);
@@ -275,7 +358,7 @@ export class AudioController {
     envelope.gain.exponentialRampToValueAtTime(SILENCE, end);
 
     oscillator.connect(envelope);
-    envelope.connect(master);
+    envelope.connect(effectsBus);
     oscillator.addEventListener('ended', () => {
       oscillator.disconnect();
       envelope.disconnect();
@@ -286,8 +369,14 @@ export class AudioController {
 
   private noiseBurst(duration: number, volume: number, frequency: number): void {
     const context = this.context;
-    const master = this.master;
-    if (this.destroyed || this.muted || context === null || master === null) return;
+    const effectsBus = this.effectsBus;
+    if (
+      this.destroyed
+      || this.muted
+      || context === null
+      || context.state !== 'running'
+      || effectsBus === null
+    ) return;
 
     const frameCount = Math.max(1, Math.floor(context.sampleRate * duration));
     const buffer = context.createBuffer(1, frameCount, context.sampleRate);
@@ -309,7 +398,7 @@ export class AudioController {
     source.buffer = buffer;
     source.connect(filter);
     filter.connect(envelope);
-    envelope.connect(master);
+    envelope.connect(effectsBus);
     source.addEventListener('ended', () => {
       source.disconnect();
       filter.disconnect();

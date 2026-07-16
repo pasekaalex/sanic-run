@@ -27,6 +27,7 @@ export interface SimulationSnapshot {
   readonly lane: Lane;
   readonly playerX: number;
   readonly playerY: number;
+  readonly jumpProgress: number | null;
   readonly coins: readonly ActiveCoin[];
   readonly obstacles: readonly ActiveObstacle[];
   readonly impactKind: ObstacleKind | null;

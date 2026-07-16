@@ -20,6 +20,7 @@ const snapshot = (score: number): SimulationSnapshot => ({
   lane: 0,
   playerX: 0,
   playerY: 0,
+  jumpProgress: null,
   coins: [],
   obstacles: [],
   impactKind: 'log',
