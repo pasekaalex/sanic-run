@@ -1,6 +1,8 @@
 import type { GamePhase } from '../game/types';
 import type { CharacterActionName } from './assetLoader';
 
+export type JumpPresentation = 'character' | 'spin';
+
 export const characterActionFor = (
   phase: GamePhase,
   jumpProgress: number | null,
@@ -20,6 +22,11 @@ export const jumpStarted = (
   previousProgress: number | null,
   currentProgress: number | null,
 ): boolean => previousProgress === null && currentProgress !== null;
+
+export const jumpPresentation = (progress: number | null): JumpPresentation => {
+  if (progress === null || !Number.isFinite(progress)) return 'character';
+  return progress >= 0.16 && progress <= 0.82 ? 'spin' : 'character';
+};
 
 export const animationCrossfadeSeconds = (action: CharacterActionName): number => {
   if (action === 'Crash') return 0.08;

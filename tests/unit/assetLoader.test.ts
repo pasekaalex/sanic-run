@@ -38,6 +38,12 @@ const ringGltf = (): GltfLike => {
   return { scene, animations: [] };
 };
 
+const spinBallGltf = (): GltfLike => {
+  const scene = new Group();
+  scene.add(renderableGroup('SANIC_SpinBall'));
+  return { scene, animations: [] };
+};
+
 const forestGltf = (names: readonly string[] = FOREST_PART_NAMES): GltfLike => {
   const scene = new Group();
   names.forEach((name) => scene.add(renderableGroup(name)));
@@ -65,8 +71,29 @@ describe('AssetLoader', () => {
 
     expect(assets.usingFallback).toBe(true);
     expect(assets.character.name).toBe('SANIC_Fallback');
+    expect(assets.spinBall.name).toBe('SANIC_SpinBall_Fallback');
     expect(assets.ring.name).toBe('SANIC_Ring_Fallback');
     expect([...assets.forestParts.keys()]).toEqual(FOREST_PART_NAMES);
+  });
+
+  it('keeps a valid semantic spin-ball root when every other category fails', async () => {
+    const spinBall = spinBallGltf();
+    const loader = new AssetLoader(loaderFor({
+      [ASSET_URLS.character]: new Error('character unavailable'),
+      [ASSET_URLS.spinBall]: spinBall,
+      [ASSET_URLS.ring]: new Error('ring unavailable'),
+      [ASSET_URLS.forest]: new Error('forest unavailable'),
+    }));
+
+    const assets = await loader.load();
+
+    expect(assets.spinBall.name).toBe('SANIC_SpinBall');
+    expect(assets.fallback).toEqual({
+      character: true,
+      spinBall: false,
+      ring: true,
+      forest: true,
+    });
   });
 
   it('keeps valid categories when just one category is malformed', async () => {
@@ -74,6 +101,7 @@ describe('AssetLoader', () => {
     const validForest = forestGltf();
     const loader = new AssetLoader(loaderFor({
       [ASSET_URLS.character]: validCharacter,
+      [ASSET_URLS.spinBall]: spinBallGltf(),
       [ASSET_URLS.ring]: { scene: renderableGroup('Wrong_Ring'), animations: [] },
       [ASSET_URLS.forest]: validForest,
     }));
@@ -83,7 +111,7 @@ describe('AssetLoader', () => {
     expect(assets.character).toBe(validCharacter.scene);
     expect(assets.ring.name).toBe('SANIC_Ring_Fallback');
     expect(assets.forest).toBe(validForest.scene);
-    expect(assets.fallback).toEqual({ character: false, ring: true, forest: false });
+    expect(assets.fallback).toEqual({ character: false, spinBall: false, ring: true, forest: false });
   });
 
   it('requires all four actions and every renderable forest root', async () => {
@@ -91,13 +119,14 @@ describe('AssetLoader', () => {
     const missingPart = forestGltf(FOREST_PART_NAMES.slice(0, -1));
     const loader = new AssetLoader(loaderFor({
       [ASSET_URLS.character]: missingAction,
+      [ASSET_URLS.spinBall]: spinBallGltf(),
       [ASSET_URLS.ring]: ringGltf(),
       [ASSET_URLS.forest]: missingPart,
     }));
 
     const assets = await loader.load();
 
-    expect(assets.fallback).toEqual({ character: true, ring: false, forest: true });
+    expect(assets.fallback).toEqual({ character: true, spinBall: false, ring: false, forest: true });
     expect(assets.ring.name).toBe('SANIC_Ring');
     expect(assets.animations.map((clip) => clip.name)).toEqual(['Idle', 'Run', 'Jump', 'Crash']);
   });
@@ -111,6 +140,7 @@ describe('AssetLoader', () => {
     directForest.scene.add(mesh('KIT_Grass'));
     const loader = new AssetLoader(loaderFor({
       [ASSET_URLS.character]: characterGltf(),
+      [ASSET_URLS.spinBall]: spinBallGltf(),
       [ASSET_URLS.ring]: { scene: directRing, animations: [] },
       [ASSET_URLS.forest]: directForest,
     }));
@@ -127,6 +157,7 @@ describe('AssetLoader', () => {
     const progress: number[] = [];
     const loader = new AssetLoader(loaderFor({
       [ASSET_URLS.character]: characterGltf(),
+      [ASSET_URLS.spinBall]: spinBallGltf(),
       [ASSET_URLS.ring]: ringGltf(),
       [ASSET_URLS.forest]: forestGltf(),
     }));
@@ -142,6 +173,7 @@ describe('AssetLoader', () => {
   it('returns immutable metadata wrappers without freezing Three objects', async () => {
     const loader = new AssetLoader(loaderFor({
       [ASSET_URLS.character]: characterGltf(),
+      [ASSET_URLS.spinBall]: spinBallGltf(),
       [ASSET_URLS.ring]: ringGltf(),
       [ASSET_URLS.forest]: forestGltf(),
     }));
@@ -151,6 +183,7 @@ describe('AssetLoader', () => {
     expect(Object.isFrozen(assets)).toBe(true);
     expect(Object.isFrozen(assets.fallback)).toBe(true);
     expect(Object.isFrozen(assets.character)).toBe(false);
+    expect(Object.isFrozen(assets.spinBall)).toBe(false);
     expect(Object.isFrozen(assets.ring)).toBe(false);
     expect(Object.isFrozen(assets.forestParts)).toBe(true);
   });

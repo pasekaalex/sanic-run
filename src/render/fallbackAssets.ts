@@ -111,6 +111,41 @@ export const createFallbackRing = (): Group => {
   return ring;
 };
 
+export const createFallbackSpinBall = (): Group => {
+  const spinBall = new Group();
+  spinBall.name = 'SANIC_SpinBall_Fallback';
+  addMesh(spinBall, new SphereGeometry(0.62, 22, 16), cobalt, [0, 0, 0], [1, 0.94, 1]);
+
+  for (let index = 0; index < 7; index += 1) {
+    const angle = (index / 7) * Math.PI * 2;
+    const quill = addMesh(
+      spinBall,
+      new ConeGeometry(0.16, 0.72, 8),
+      cobalt,
+      [Math.cos(angle) * 0.56, Math.sin(angle) * 0.56, 0],
+      [1, 1, 0.72],
+    );
+    quill.rotation.z = angle - Math.PI / 2;
+    quill.rotation.y = -0.28;
+  }
+
+  const redFlash = addMesh(
+    spinBall,
+    new TorusGeometry(0.49, 0.075, 8, 28, Math.PI * 0.72),
+    red,
+    [0, 0, -0.46],
+  );
+  redFlash.rotation.z = 0.46;
+  const whiteFlash = addMesh(
+    spinBall,
+    new TorusGeometry(0.4, 0.052, 8, 24, Math.PI * 0.68),
+    white,
+    [0, 0, -0.51],
+  );
+  whiteFlash.rotation.z = Math.PI + 0.36;
+  return spinBall;
+};
+
 const createTree = (name: string, variant: number): Group => {
   const root = new Group();
   root.name = name;

@@ -3,6 +3,7 @@ import {
   animationCrossfadeSeconds,
   characterActionFor,
   interpolateJumpProgress,
+  jumpPresentation,
   jumpClipTime,
   jumpStarted,
 } from '../../src/render/animationTiming';
@@ -44,5 +45,14 @@ describe('animationTiming', () => {
     expect(interpolateJumpProgress(1, null, 0)).toBe(1);
     expect(interpolateJumpProgress(1, null, 1)).toBe(1);
     expect(interpolateJumpProgress(null, null, 0.5)).toBeNull();
+  });
+
+  it('shows the curled spin ball only through the airborne tuck window', () => {
+    expect(jumpPresentation(null)).toBe('character');
+    expect(jumpPresentation(Number.NaN)).toBe('character');
+    expect(jumpPresentation(0.15)).toBe('character');
+    expect(jumpPresentation(0.16)).toBe('spin');
+    expect(jumpPresentation(0.82)).toBe('spin');
+    expect(jumpPresentation(0.83)).toBe('character');
   });
 });

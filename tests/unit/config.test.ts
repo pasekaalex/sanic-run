@@ -13,5 +13,6 @@ describe('immutable launch configuration', () => {
     expect(GAME.maxMultiplier).toBe(5);
     expect(GAME.ringsPerMultiplier).toBe(10);
     expect(ASSET_URLS.character).toBe('/models/sanic-runner.glb');
+    expect(ASSET_URLS.spinBall).toBe('/models/sanic-spin-ball.glb');
   });
 });

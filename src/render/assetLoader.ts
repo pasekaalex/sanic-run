@@ -5,6 +5,7 @@ import {
   createFallbackCharacter,
   createFallbackForest,
   createFallbackRing,
+  createFallbackSpinBall,
   FALLBACK_FOREST_PART_NAMES,
 } from './fallbackAssets';
 
@@ -28,19 +29,21 @@ export interface LoaderLike {
 export interface LoadedAssets {
   readonly character: Group;
   readonly animations: readonly AnimationClip[];
+  readonly spinBall: Object3D;
   readonly ring: Object3D;
   readonly forest: Group;
   readonly forestParts: ReadonlyMap<ForestPartName, Object3D>;
   readonly usingFallback: boolean;
   readonly fallback: Readonly<{
     character: boolean;
+    spinBall: boolean;
     ring: boolean;
     forest: boolean;
   }>;
 }
 
 type ProgressCallback = (progress: number) => void;
-type Category = 'character' | 'ring' | 'forest';
+type Category = 'character' | 'spinBall' | 'ring' | 'forest';
 
 const hasRenderableDescendant = (root: Object3D): boolean => {
   let found = false;
@@ -87,6 +90,14 @@ const selectRing = (gltf: GltfLike | undefined): { ring: Object3D; fallback: boo
   return { ring: createFallbackRing(), fallback: true };
 };
 
+const selectSpinBall = (gltf: GltfLike | undefined): { spinBall: Object3D; fallback: boolean } => {
+  const candidate = gltf?.scene.getObjectByName('SANIC_SpinBall');
+  if (candidate && hasRenderableDescendant(candidate)) {
+    return { spinBall: candidate, fallback: false };
+  }
+  return { spinBall: createFallbackSpinBall(), fallback: true };
+};
+
 const selectForest = (gltf: GltfLike | undefined): {
   forest: Group;
   parts: Map<ForestPartName, Object3D>;
@@ -118,13 +129,19 @@ export class AssetLoader {
   }
 
   async load(onProgress: ProgressCallback = () => undefined): Promise<LoadedAssets> {
-    const categories: readonly Category[] = ['character', 'ring', 'forest'];
+    const categories: readonly Category[] = ['character', 'spinBall', 'ring', 'forest'];
     const urls: Record<Category, string> = {
       character: ASSET_URLS.character,
+      spinBall: ASSET_URLS.spinBall,
       ring: ASSET_URLS.ring,
       forest: ASSET_URLS.forest,
     };
-    const categoryProgress: Record<Category, number> = { character: 0, ring: 0, forest: 0 };
+    const categoryProgress: Record<Category, number> = {
+      character: 0,
+      spinBall: 0,
+      ring: 0,
+      forest: 0,
+    };
     let reported = -1;
     const report = (): void => {
       const next = Math.max(0, Math.min(1, categories.reduce(
@@ -156,12 +173,14 @@ export class AssetLoader {
       }
     };
 
-    const [characterGltf, ringGltf, forestGltf] = await Promise.all(categories.map(loadCategory));
+    const [characterGltf, spinBallGltf, ringGltf, forestGltf] = await Promise.all(categories.map(loadCategory));
     const character = selectCharacter(characterGltf);
+    const spinBall = selectSpinBall(spinBallGltf);
     const ring = selectRing(ringGltf);
     const forest = selectForest(forestGltf);
     const fallback = Object.freeze({
       character: character.fallback,
+      spinBall: spinBall.fallback,
       ring: ring.fallback,
       forest: forest.fallback,
     });
@@ -169,10 +188,11 @@ export class AssetLoader {
     return Object.freeze({
       character: character.character,
       animations: Object.freeze([...character.animations]),
+      spinBall: spinBall.spinBall,
       ring: ring.ring,
       forest: forest.forest,
       forestParts: makeReadonlyMap(forest.parts),
-      usingFallback: fallback.character || fallback.ring || fallback.forest,
+      usingFallback: fallback.character || fallback.spinBall || fallback.ring || fallback.forest,
       fallback,
     });
   }

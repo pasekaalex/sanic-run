@@ -21,6 +21,7 @@ export const GAME = Object.freeze({
 
 export const ASSET_URLS = Object.freeze({
   character: '/models/sanic-runner.glb',
+  spinBall: '/models/sanic-spin-ball.glb',
   ring: '/models/sanic-ring.glb',
   forest: '/models/forest-kit.glb',
   promo: '/media/sanic-game-promo.png',
