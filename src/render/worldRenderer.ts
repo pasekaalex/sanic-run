@@ -55,6 +55,7 @@ import { nextSpinRotation } from './spinPresentation';
 export interface WorldRendererOptions {
   readonly onContextLost?: () => void;
   readonly onContextRestored?: () => void;
+  readonly enableTestProbes?: boolean;
 }
 
 interface InstancedComponent {
@@ -111,8 +112,11 @@ const materialAt = (material: Material | Material[], index: number): Material =>
   Array.isArray(material) ? material[index] ?? material[0]! : material
 );
 
-const createCharacterPoseProbe = (character: Group): CharacterPoseProbe | null => {
-  if (new URLSearchParams(window.location.search).get('e2e') !== '1') return null;
+const createCharacterPoseProbe = (
+  character: Group,
+  enabled: boolean,
+): CharacterPoseProbe | null => {
+  if (!enabled) return null;
   const root = character.getObjectByName('root');
   const hips = character.getObjectByName('hips');
   const chest = character.getObjectByName('chest');
@@ -377,7 +381,10 @@ export class WorldRenderer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     });
-    this.poseProbe = createCharacterPoseProbe(this.character);
+    this.poseProbe = createCharacterPoseProbe(
+      this.character,
+      this.options.enableTestProbes === true,
+    );
     this.spinBall = assets.spinBall;
     this.spinBall.name ||= 'SANIC_SpinBall';
     const spinBounds = new Box3().setFromObject(this.spinBall);
@@ -526,6 +533,17 @@ export class WorldRenderer {
     this.directionalLight.castShadow = !enabled;
     if (enabled) this.dust.clear();
     this.resize();
+  }
+
+  completeCrashAnimation(): void {
+    if (this.destroyed) return;
+    const crash = this.actions.get('Crash');
+    if (!crash) return;
+    this.mixer.stopAllAction();
+    crash.reset().setEffectiveWeight(1).play();
+    crash.time = crash.getClip().duration;
+    this.mixer.update(0);
+    this.currentActionName = 'Crash';
   }
 
   destroy(): void {

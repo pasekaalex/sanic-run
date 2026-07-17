@@ -97,6 +97,115 @@ const beginRun = async (page: Page): Promise<void> => {
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
 };
 
+const installAudioSuspendProbe = async (page: Page): Promise<void> => {
+  await page.addInitScript(() => {
+    const nativeSuspend = AudioContext.prototype.suspend;
+    let suspends = 0;
+    AudioContext.prototype.suspend = function suspend(): Promise<void> {
+      suspends += 1;
+      return nativeSuspend.call(this);
+    };
+    Object.defineProperty(window, '__sanicAudioSuspendProbe', {
+      configurable: true,
+      value: Object.freeze({ read: () => suspends }),
+    });
+  });
+};
+
+const readAudioSuspends = (page: Page): Promise<number> => page.evaluate(() => (
+  window as typeof window & {
+    __sanicAudioSuspendProbe: Readonly<{ read(): number }>;
+  }
+).__sanicAudioSuspendProbe.read());
+
+const installGameLoopProbe = async (page: Page): Promise<void> => {
+  await page.addInitScript(() => {
+    const nativeRequest = window.requestAnimationFrame.bind(window);
+    const nativeCancel = window.cancelAnimationFrame.bind(window);
+    const pendingFrames = new Map<number, boolean>();
+    let callbacks = 0;
+    let frozen = false;
+    let pending = 0;
+    let maximumPending = 0;
+    let syntheticFrameId = -1;
+
+    window.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+      const isGameLoop = callback.name === 'tick';
+      if (isGameLoop && frozen) {
+        const frameId = syntheticFrameId;
+        syntheticFrameId -= 1;
+        pendingFrames.set(frameId, true);
+        pending += 1;
+        maximumPending = Math.max(maximumPending, pending);
+        return frameId;
+      }
+      let frameId = 0;
+      frameId = nativeRequest((timestamp) => {
+        if (pendingFrames.get(frameId) === true) pending -= 1;
+        pendingFrames.delete(frameId);
+        if (isGameLoop) callbacks += 1;
+        callback(timestamp);
+      });
+      pendingFrames.set(frameId, isGameLoop);
+      if (isGameLoop) {
+        pending += 1;
+        maximumPending = Math.max(maximumPending, pending);
+      }
+      return frameId;
+    }) as typeof window.requestAnimationFrame;
+
+    window.cancelAnimationFrame = ((frameId: number): void => {
+      if (pendingFrames.get(frameId) === true) pending -= 1;
+      pendingFrames.delete(frameId);
+      nativeCancel(frameId);
+    }) as typeof window.cancelAnimationFrame;
+
+    Object.defineProperty(window, '__sanicGameLoopProbe', {
+      configurable: true,
+      value: Object.freeze({
+        freeze: () => {
+          frozen = true;
+          for (const [frameId, isGameLoop] of [...pendingFrames]) {
+            if (!isGameLoop) continue;
+            pendingFrames.delete(frameId);
+            pending -= 1;
+            if (frameId >= 0) nativeCancel(frameId);
+          }
+        },
+        read: () => ({ callbacks, maximumPending, pending }),
+        reset: () => {
+          callbacks = 0;
+          maximumPending = pending;
+        },
+      }),
+    });
+  });
+};
+
+type GameLoopProbeSnapshot = Readonly<{
+  callbacks: number;
+  maximumPending: number;
+  pending: number;
+}>;
+
+const readGameLoopProbe = (page: Page): Promise<GameLoopProbeSnapshot> => page.evaluate(() => (
+  window as typeof window & {
+    __sanicGameLoopProbe: Readonly<{ read(): GameLoopProbeSnapshot }>;
+  }
+).__sanicGameLoopProbe.read());
+
+const resetGameLoopProbe = (page: Page): Promise<void> => page.evaluate(() => (
+  window as typeof window & {
+    __sanicGameLoopProbe: Readonly<{ reset(): void }>;
+  }
+).__sanicGameLoopProbe.reset());
+
+const freezeGameLoop = (page: Page): Promise<void> => page.evaluate(() => (
+  window as typeof window & {
+    __sanicGameLoopProbe: Readonly<{ freeze(): void }>;
+  }
+).__sanicGameLoopProbe.freeze());
+
 const withHeldModels = async (
   page: Page,
   assertion: () => Promise<void>,
@@ -968,6 +1077,172 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
 
   await restart.click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+});
+
+test('suspends impact audio at 360ms but holds results for the full crash', async ({ page }) => {
+  await installAudioSuspendProbe(page);
+  await beginRun(page);
+  const ui = page.locator('#app-ui');
+  const canvas = page.locator('#game-canvas');
+  const results = page.getByRole('dialog', { name: 'GAME OVER' });
+
+  const checkpoints = await page.evaluate(() => new Promise<{
+    readonly immediateUiPhase?: string;
+    readonly early: Readonly<{
+      action?: string;
+      gamePhase?: string;
+      pose?: string;
+      resultsOpen: boolean;
+      suspends: number;
+      uiPhase?: string;
+    }>;
+    readonly late: Readonly<{
+      pose?: string;
+      resultsOpen: boolean;
+      suspends: number;
+      uiPhase?: string;
+    }>;
+  }>((resolve, reject) => {
+    const read = () => {
+      const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
+      const resultsDialog = document.querySelector<HTMLDialogElement>('[data-dialog="results"]');
+      const suspendProbe = (
+        window as typeof window & {
+          __sanicAudioSuspendProbe: Readonly<{ read(): number }>;
+        }
+      ).__sanicAudioSuspendProbe;
+      return {
+        action: canvas?.dataset.characterAction,
+        gamePhase: canvas?.dataset.gamePhase,
+        pose: canvas?.dataset.poseProbe,
+        resultsOpen: resultsDialog?.open === true,
+        suspends: suspendProbe.read(),
+        uiPhase: document.querySelector<HTMLElement>('#app-ui')?.dataset.phase,
+      };
+    };
+
+    window.dispatchEvent(new CustomEvent('sanic:e2e-crash'));
+    const immediateUiPhase = document.querySelector<HTMLElement>('#app-ui')?.dataset.phase;
+    let early: ReturnType<typeof read> | null = null;
+    window.setTimeout(() => { early = read(); }, 450);
+    window.setTimeout(() => {
+      if (early === null) {
+        reject(new Error('Missing early crash checkpoint'));
+        return;
+      }
+      resolve({ immediateUiPhase, early, late: read() });
+    }, 750);
+  }));
+
+  expect(checkpoints.immediateUiPhase).toBe('playing');
+  expect(checkpoints.early).toMatchObject({
+    action: 'Crash',
+    gamePhase: 'gameOver',
+    resultsOpen: false,
+    suspends: 1,
+    uiPhase: 'playing',
+  });
+  expect(checkpoints.early.pose).toBeDefined();
+  expect(checkpoints.late.pose).toBeDefined();
+  expect(checkpoints.late).toMatchObject({
+    resultsOpen: false,
+    suspends: 1,
+    uiPhase: 'playing',
+  });
+
+  await expect(results).toBeVisible({ timeout: 2_500 });
+  await expect(ui).toHaveAttribute('data-phase', 'gameOver');
+  await expect.poll(() => readAudioSuspends(page)).toBe(1);
+  expect(await canvas.getAttribute('data-pose-probe')).not.toBe(checkpoints.early.pose);
+});
+
+test('timer completion clamps the Crash mixer when RAF is throttled', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'mixer completion is viewport-independent');
+  await installGameLoopProbe(page);
+  await beginRun(page);
+  const canvas = page.locator('#game-canvas');
+  const results = page.getByRole('dialog', { name: 'GAME OVER' });
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  await expect(results).toBeVisible({ timeout: 2_500 });
+  const normalFinalPose = (await canvas.getAttribute('data-pose-probe'))
+    ?.split(',')
+    .map(Number);
+  expect(normalFinalPose).toHaveLength(9);
+
+  await page.getByRole('button', { name: /^run it back$/i }).click();
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+  await freezeGameLoop(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  await expect(results).toBeVisible({ timeout: 2_500 });
+  const throttledFinalPose = (await canvas.getAttribute('data-pose-probe'))
+    ?.split(',')
+    .map(Number);
+  expect(throttledFinalPose).toHaveLength(9);
+
+  for (let index = 0; index < normalFinalPose!.length; index += 1) {
+    expect(throttledFinalPose![index]).toBeCloseTo(normalFinalPose![index]!, 4);
+  }
+});
+
+test('pause stops the game RAF and resume owns exactly one loop', async ({ page }) => {
+  await installGameLoopProbe(page);
+  await beginRun(page);
+  const ui = page.locator('#app-ui');
+
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(ui).toHaveAttribute('data-phase', 'paused');
+  await resetGameLoopProbe(page);
+  await page.waitForTimeout(500);
+  expect(await readGameLoopProbe(page)).toEqual({
+    callbacks: 0,
+    maximumPending: 0,
+    pending: 0,
+  });
+
+  await page.getByRole('button', { name: /^resume$/i }).click();
+  await expect(ui).toHaveAttribute('data-phase', 'playing');
+  await page.waitForTimeout(300);
+  const resumed = await readGameLoopProbe(page);
+  expect(resumed.callbacks).toBeGreaterThan(0);
+  expect(resumed.maximumPending).toBe(1);
+  expect(resumed.pending).toBe(1);
+
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await expect(ui).toHaveAttribute('data-phase', 'paused');
+  await resetGameLoopProbe(page);
+  await page.waitForTimeout(200);
+  expect(await readGameLoopProbe(page)).toEqual({
+    callbacks: 0,
+    maximumPending: 0,
+    pending: 0,
+  });
+});
+
+test('restart and destroy cancel an unfinished crash transition', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'timer ownership is viewport-independent');
+  await installAudioSuspendProbe(page);
+  await beginRun(page);
+  const ui = page.locator('#app-ui');
+  const canvas = page.locator('#game-canvas');
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('sanic:e2e-crash'));
+    document.querySelector<HTMLButtonElement>('[data-action="restart"]')?.click();
+  });
+  await expect(ui).toHaveAttribute('data-phase', 'playing');
+  await page.waitForTimeout(1_700);
+  await expect(ui).toHaveAttribute('data-phase', 'playing');
+  await expect(canvas).toHaveAttribute('data-character-action', 'Run');
+  expect(await readAudioSuspends(page)).toBe(0);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('sanic:e2e-crash'));
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }));
+  });
+  await page.waitForTimeout(1_700);
+  expect(await readAudioSuspends(page)).toBe(0);
+  expect(await ui.locator('[data-dialog="results"]').count()).toBe(0);
 });
 
 test('dialog fallback keeps the background inert and keyboard focus contained', async ({ page }) => {

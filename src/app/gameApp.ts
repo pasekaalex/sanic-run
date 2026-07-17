@@ -19,6 +19,9 @@ const MAX_FRAME_SECONDS = 0.25;
 const UI_INTERVAL_MS = 50;
 const E2E_CRASH_EVENT = 'sanic:e2e-crash';
 const E2E_GUARD_STEPS = 4_000;
+const DEFAULT_CRASH_DURATION_SECONDS = 1;
+const CRASH_SETTLE_FRAME_MS = 50;
+const IMPACT_SUSPEND_MS = 360;
 
 const freezeRow = (row: SpawnRow): SpawnRow => Object.freeze({
   ...row,
@@ -53,7 +56,11 @@ class E2ESpawnSource implements SpawnSource {
   }
 }
 
-const readSeed = (parameters: URLSearchParams): number => {
+const readSeed = (
+  parameters: URLSearchParams,
+  allowTestOverrides: boolean,
+): number => {
+  if (!allowTestOverrides) return 0x5a11c;
   const value = Number(parameters.get('seed'));
   return Number.isSafeInteger(value) ? value : 0x5a11c;
 };
@@ -76,6 +83,10 @@ const supportsWebGL2 = (): boolean => {
 
 export class GameApp {
   private readonly parameters = new URLSearchParams(window.location.search);
+  private readonly allowTestOverrides = import.meta.env.DEV
+    || import.meta.env.MODE === 'e2e';
+  private readonly testMode = this.allowTestOverrides
+    && this.parameters.get('e2e') === '1';
   private readonly simulation: GameSimulation;
   private readonly audio: AudioController;
   private readonly input: InputController;
@@ -97,14 +108,20 @@ export class GameApp {
   private scoreCardObjectUrl: string | null = null;
   private contextAvailable = true;
   private impactSuspendTimer: number | null = null;
+  private crashTransitionTimer: number | null = null;
+  private crashTransitionMs = (DEFAULT_CRASH_DURATION_SECONDS * 1_000)
+    + CRASH_SETTLE_FRAME_MS;
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
     root: HTMLElement,
   ) {
     this.preferences = loadPreferences();
-    const source = this.parameters.get('e2e') === '1' ? new E2ESpawnSource() : undefined;
-    this.simulation = new GameSimulation(readSeed(this.parameters), source);
+    const source = this.testMode ? new E2ESpawnSource() : undefined;
+    this.simulation = new GameSimulation(
+      readSeed(this.parameters, this.allowTestOverrides),
+      source,
+    );
     this.previousSnapshot = this.simulation.snapshot();
     this.currentSnapshot = this.previousSnapshot;
     this.audio = new AudioController(this.preferences.muted);
@@ -125,7 +142,7 @@ export class GameApp {
 
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('blur', this.handleWindowBlur);
-    if (this.parameters.get('e2e') === '1') {
+    if (this.testMode) {
       window.addEventListener(E2E_CRASH_EVENT, this.handleE2ECrash);
     }
   }
@@ -135,7 +152,10 @@ export class GameApp {
     this.phase = 'loading';
     this.ui.setLoading(0);
 
-    if (this.parameters.get('forceFallback') === '1' || !supportsWebGL2()) {
+    if (
+      (this.allowTestOverrides && this.parameters.get('forceFallback') === '1')
+      || !supportsWebGL2()
+    ) {
       if (!this.destroyed && initializationId === this.initializationId) {
         this.phase = 'unsupported';
         this.canvas.hidden = true;
@@ -152,6 +172,10 @@ export class GameApp {
       });
       if (this.destroyed || initializationId !== this.initializationId) return;
 
+      const crashDuration = assets.animations.find(({ name }) => name === 'Crash')?.duration;
+      if (crashDuration !== undefined && Number.isFinite(crashDuration) && crashDuration > 0) {
+        this.crashTransitionMs = (crashDuration * 1_000) + CRASH_SETTLE_FRAME_MS;
+      }
       this.canvas.dataset.characterAsset = assets.fallback.character ? 'fallback' : 'glb';
       this.canvas.dataset.spinBallAsset = assets.fallback.spinBall ? 'fallback' : 'glb';
       this.canvas.dataset.ringAsset = assets.fallback.ring ? 'fallback' : 'glb';
@@ -160,8 +184,9 @@ export class GameApp {
       this.renderer = new WorldRenderer(this.canvas, assets, {
         onContextLost: this.handleContextLost,
         onContextRestored: this.handleContextRestored,
+        enableTestProbes: this.testMode,
       });
-      this.renderer.setLowEffects(this.preferences.lowEffects || this.parameters.get('e2e') === '1');
+      this.renderer.setLowEffects(this.preferences.lowEffects || this.testMode);
       this.phase = 'intro';
       this.ui.showIntro();
       this.startLoop();
@@ -177,9 +202,8 @@ export class GameApp {
     if (this.destroyed) return;
     this.destroyed = true;
     this.initializationId += 1;
-    if (this.rafId !== null) cancelAnimationFrame(this.rafId);
-    this.rafId = null;
-    this.clearImpactSuspend();
+    this.stopLoop();
+    this.clearCrashSequence();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('blur', this.handleWindowBlur);
     window.removeEventListener(E2E_CRASH_EVENT, this.handleE2ECrash);
@@ -204,12 +228,14 @@ export class GameApp {
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN STARTED');
+    this.startLoop();
   }
 
   private pause(): void {
     if (this.destroyed || this.phase !== 'playing') return;
     this.simulation.pause();
     this.phase = 'paused';
+    this.stopLoop();
     this.syncSnapshots();
     this.renderer?.render(this.previousSnapshot, this.currentSnapshot, 1);
     this.audio.suspend();
@@ -226,14 +252,15 @@ export class GameApp {
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN RESUMED');
+    this.startLoop();
   }
 
   private restart(): void {
     if (this.destroyed || !this.contextAvailable || this.phase !== 'gameOver') return;
-    this.clearImpactSuspend();
+    this.clearCrashSequence();
     this.clearScoreCard();
     this.runId += 1;
-    this.simulation.restart(readSeed(this.parameters));
+    this.simulation.restart(readSeed(this.parameters, this.allowTestOverrides));
     this.phase = 'playing';
     this.audio.restart();
     this.resetClocks();
@@ -242,6 +269,7 @@ export class GameApp {
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN RESTARTED');
+    this.startLoop();
   }
 
   private setMuted(muted: boolean): void {
@@ -345,9 +373,21 @@ export class GameApp {
     this.rafId = requestAnimationFrame(this.tick);
   }
 
+  private stopLoop(): void {
+    if (this.rafId === null) return;
+    cancelAnimationFrame(this.rafId);
+    this.rafId = null;
+  }
+
+  private shouldAnimate(): boolean {
+    return this.phase === 'intro'
+      || this.phase === 'playing'
+      || (this.phase === 'gameOver' && this.crashTransitionTimer !== null);
+  }
+
   private readonly tick = (timestamp: number): void => {
+    this.rafId = null;
     if (this.destroyed) return;
-    this.rafId = requestAnimationFrame(this.tick);
     const renderer = this.renderer;
     if (renderer === null) return;
 
@@ -370,17 +410,14 @@ export class GameApp {
       }
     }
 
-    if (
-      this.phase === 'intro'
-      || this.phase === 'playing'
-      || (this.phase === 'gameOver' && this.impactSuspendTimer !== null)
-    ) {
+    if (this.shouldAnimate()) {
       renderer.render(
         this.previousSnapshot,
         this.currentSnapshot,
         this.phase === 'playing' ? this.accumulator / GAME.fixedStep : 1,
       );
     }
+    if (this.shouldAnimate()) this.startLoop();
   };
 
   private afterStep(
@@ -399,20 +436,39 @@ export class GameApp {
     this.audio.gameOver();
     this.audio.impact();
     this.renderer?.render(this.previousSnapshot, snapshot, 1);
-    this.clearImpactSuspend();
-    this.impactSuspendTimer = window.setTimeout(() => {
-      this.impactSuspendTimer = null;
-      if (!this.destroyed && this.phase === 'gameOver') this.audio.suspend();
-    }, 360);
+    this.clearCrashSequence();
     this.preferences = Object.freeze({
       ...this.preferences,
       bestScore: Math.max(this.preferences.bestScore, Math.floor(snapshot.score)),
     });
     savePreferences(this.preferences);
     const rank = getScoreRank(snapshot.score);
-    this.ui.showGameOver(snapshot, this.preferences.bestScore, { rank, shareReady: false });
     const scoreCardRun = ++this.runId;
-    void this.prepareScoreCard(snapshot, rank, scoreCardRun);
+    this.impactSuspendTimer = window.setTimeout(() => {
+      this.impactSuspendTimer = null;
+      if (
+        !this.destroyed
+        && this.phase === 'gameOver'
+        && scoreCardRun === this.runId
+      ) this.audio.suspend();
+    }, IMPACT_SUSPEND_MS);
+    this.crashTransitionTimer = window.setTimeout(() => {
+      this.crashTransitionTimer = null;
+      if (
+        this.destroyed
+        || this.phase !== 'gameOver'
+        || scoreCardRun !== this.runId
+      ) return;
+      this.stopLoop();
+      this.renderer?.completeCrashAnimation();
+      this.renderer?.render(this.previousSnapshot, snapshot, 1);
+      this.ui.showGameOver(snapshot, this.preferences.bestScore, {
+        rank,
+        shareReady: false,
+      });
+      void this.prepareScoreCard(snapshot, rank, scoreCardRun);
+    }, this.crashTransitionMs);
+    this.startLoop();
   }
 
   private async prepareScoreCard(
@@ -505,10 +561,15 @@ export class GameApp {
     this.ui.setShareReady(false);
   }
 
-  private clearImpactSuspend(): void {
-    if (this.impactSuspendTimer === null) return;
-    window.clearTimeout(this.impactSuspendTimer);
-    this.impactSuspendTimer = null;
+  private clearCrashSequence(): void {
+    if (this.impactSuspendTimer !== null) {
+      window.clearTimeout(this.impactSuspendTimer);
+      this.impactSuspendTimer = null;
+    }
+    if (this.crashTransitionTimer !== null) {
+      window.clearTimeout(this.crashTransitionTimer);
+      this.crashTransitionTimer = null;
+    }
   }
 
   private revokeScoreCardUrl(): void {
