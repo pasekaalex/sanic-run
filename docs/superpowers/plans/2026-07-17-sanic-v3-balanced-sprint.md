@@ -16,7 +16,7 @@
 - Keep these v2 rollback artifacts byte-for-byte unchanged:
   - `/home/alex/Downloads/SANIC-Meshy-v2/SANIC-meshy6-v2-run.glb` — `3567547081fb191a73562b306bea3dba299e717d89152ae42dd03e5a69a03333`
   - `/home/alex/Downloads/SANIC-Meshy-v2/SANIC-meshy6-v2-run.blend` — `80960279c1e08a3c130bca92027a53bc9958bd9010cb891a777d2da2ee0236d7`
-- Keep the current v1 and v2 builder branches behaviorally unchanged. Add `v3-run` as a separate conditional branch; do not refactor shared rigging, skinning, non-Run action, or export code during this sprint.
+- Keep the current v1 and v2 builder branches behaviorally unchanged. Add `v3-run` as a separate conditional branch. The only permitted shared refactor is extracting the existing quaternion/root key insertion statements into `insert_pose_keys()` so v3 does not duplicate them; the all-action v1/v2 rebuild comparison must prove maximum delta `0.0`. Do not otherwise refactor shared rigging, skinning, non-Run action, or export code during this sprint.
 - Preserve `Jump` exactly: 10,560 sampled matrix-basis values, maximum delta `0.0`, identical SHA-256 snapshot.
 - Do not change the mesh, face, quills, gloves, shoes, materials, spin-ball, jump physics, world speed, or `runTimeScale` cap.
 - Meshy spend is capped at one 5-credit auto-rig plus one 3-credit animation. No automatic retry, alternate action, or additional generation is authorized.
@@ -648,6 +648,28 @@ def flight_root_offset(
 Implement the two-pass solve completely:
 
 ```python
+def insert_pose_keys(
+    frame: int,
+    previous: dict[str, object],
+) -> None:
+    for bone in rig.pose.bones:
+        quaternion = bone.rotation_quaternion.copy().normalized()
+        earlier = previous.get(bone.name)
+        if earlier is not None and earlier.dot(quaternion) < 0.0:
+            quaternion.negate()
+        bone.rotation_quaternion = quaternion
+        previous[bone.name] = quaternion.copy()
+        bone.keyframe_insert(
+            "rotation_quaternion",
+            frame=frame,
+            group=bone.name,
+        )
+    rig.pose.bones["root"].keyframe_insert(
+        "location",
+        frame=frame,
+        group="root",
+    )
+
 def make_v3_run(
     anchors: dict[int, dict[str, object]],
 ) -> bpy.types.Action:
@@ -691,23 +713,7 @@ def make_v3_run(
         scene.frame_set(frame)
         solved = {**poses[frame], "root_offset": root_offsets[frame]}
         solve_pose(solved)
-        for bone in rig.pose.bones:
-            quaternion = bone.rotation_quaternion.copy().normalized()
-            earlier = previous.get(bone.name)
-            if earlier is not None and earlier.dot(quaternion) < 0.0:
-                quaternion.negate()
-            bone.rotation_quaternion = quaternion
-            previous[bone.name] = quaternion.copy()
-            bone.keyframe_insert(
-                "rotation_quaternion",
-                frame=frame,
-                group=bone.name,
-            )
-        rig.pose.bones["root"].keyframe_insert(
-            "location",
-            frame=frame,
-            group="root",
-        )
+        insert_pose_keys(frame, previous)
 
     for curve in layered_fcurves(action):
         for point in curve.keyframe_points:
@@ -724,7 +730,7 @@ run = make_v3_run(v3_anchors)
 
 Frames 1 and 17 must use the same pose and solved root offset. The validator, not visual guesswork, decides whether the 24 mm arc needs adjustment within the approved 35–50 mm total COM range.
 
-Implement this as a separate `make_v3_run()` helper beside the existing `make()`/`key_pose()` path. Reuse pose solving and key insertion, but do not change the existing function's grounding behavior or call sites for v1, v2, Idle, Jump, or Crash.
+Implement this as a separate `make_v3_run()` helper beside the existing `make()`/`key_pose()` path. Extract the current key-insertion statements exactly into `insert_pose_keys()` and call it from both `key_pose()` and v3. Do not change existing grounding behavior or the `make()` call sites for v1, v2, Idle, Jump, or Crash.
 
 - [ ] **Step 5: Add the mandatory rear gameplay-camera preview**
 
