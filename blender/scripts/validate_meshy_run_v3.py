@@ -30,6 +30,7 @@ LOAD = ((3, "L"), (11, "R"))
 TOE_OFF = ((5, "L"), (13, "R"))
 FLIGHT = (7, 15)
 RECOVERY = ((5, "R", "L"), (13, "L", "R"))
+FLIGHT_RECOVERY = ((7, "L"), (15, "R"))
 V2_STRIDE_METERS = 0.504341721534729
 MINIMUM_V3_STRIDE_METERS = V2_STRIDE_METERS * 1.35
 
@@ -43,6 +44,14 @@ MAXIMUM_ROOT_HORIZONTAL_RANGE_X = 0.001
 MAXIMUM_ROOT_HORIZONTAL_RANGE_Y = 0.001
 MINIMUM_KNEE_FLEXION = 15.0
 MINIMUM_RECOVERY_KNEE_HEIGHT_DELTA = 0.120
+MINIMUM_FLIGHT_RECOVERY_KNEE_FORWARD = 0.120
+MAXIMUM_FLIGHT_RECOVERY_KNEE_FORWARD = 0.220
+MINIMUM_FLIGHT_RECOVERY_ANKLE_BEHIND_KNEE = 0.180
+MAXIMUM_FLIGHT_RECOVERY_ANKLE_BEHIND_KNEE = 0.225
+MINIMUM_FLIGHT_RECOVERY_ANKLE_BELOW_KNEE = 0.050
+MAXIMUM_FLIGHT_RECOVERY_ANKLE_BELOW_KNEE = 0.120
+MINIMUM_FLIGHT_RECOVERY_KNEE_FLEXION = 80.0
+MAXIMUM_FLIGHT_RECOVERY_KNEE_FLEXION = 115.0
 MINIMUM_STANCE_PITCH_PROGRESSION = 22.0
 MAXIMUM_STRIKE_FOREFOOT_Z = 0.006
 MINIMUM_STRIKE_HEEL_Z = 0.015
@@ -355,6 +364,24 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
         )
         for frame, recovery, support in RECOVERY
     }
+    flight_recovery_chain = {
+        f"{frame}:{side}": {
+            "knee_forward_of_hip": (
+                samples[frame][side]["knee"]
+                - samples[frame][side]["hip"]
+            ).dot(FORWARD),
+            "ankle_behind_knee": (
+                samples[frame][side]["knee"]
+                - samples[frame][side]["ankle"]
+            ).dot(FORWARD),
+            "ankle_below_knee": (
+                samples[frame][side]["knee"]
+                - samples[frame][side]["ankle"]
+            ).dot(UP),
+            "knee_flexion": samples[frame][side]["knee_flexion"],
+        }
+        for frame, side in FLIGHT_RECOVERY
+    }
     stance_pitch_progression = {
         side: max(samples[frame][side]["foot_pitch"] for frame in frames)
         - min(samples[frame][side]["foot_pitch"] for frame in frames)
@@ -467,6 +494,15 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
             "minimum": rounded(min(recovery_deltas.values())),
             "samples": {
                 key: rounded(value) for key, value in recovery_deltas.items()
+            },
+        },
+        "flight_recovery_chain": {
+            "samples": {
+                key: {
+                    metric: rounded(value)
+                    for metric, value in values.items()
+                }
+                for key, values in flight_recovery_chain.items()
             },
         },
         "stance_pitch_progression": {
@@ -649,6 +685,63 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
         >= MINIMUM_RECOVERY_KNEE_HEIGHT_DELTA,
         metrics["recovery_knee_height_delta"],
         f">= {MINIMUM_RECOVERY_KNEE_HEIGHT_DELTA}",
+    )
+    flight_recovery_knee_forward = [
+        values["knee_forward_of_hip"]
+        for values in flight_recovery_chain.values()
+    ]
+    flight_recovery_ankle_behind = [
+        values["ankle_behind_knee"]
+        for values in flight_recovery_chain.values()
+    ]
+    flight_recovery_ankle_below = [
+        values["ankle_below_knee"]
+        for values in flight_recovery_chain.values()
+    ]
+    flight_recovery_knee_flexion = [
+        values["knee_flexion"] for values in flight_recovery_chain.values()
+    ]
+    check(
+        "flight_recovery_chain",
+        all(
+            MINIMUM_FLIGHT_RECOVERY_KNEE_FORWARD
+            <= value
+            <= MAXIMUM_FLIGHT_RECOVERY_KNEE_FORWARD
+            for value in flight_recovery_knee_forward
+        )
+        and all(
+            MINIMUM_FLIGHT_RECOVERY_ANKLE_BEHIND_KNEE
+            <= value
+            <= MAXIMUM_FLIGHT_RECOVERY_ANKLE_BEHIND_KNEE
+            for value in flight_recovery_ankle_behind
+        )
+        and all(
+            MINIMUM_FLIGHT_RECOVERY_ANKLE_BELOW_KNEE
+            <= value
+            <= MAXIMUM_FLIGHT_RECOVERY_ANKLE_BELOW_KNEE
+            for value in flight_recovery_ankle_below
+        )
+        and all(
+            MINIMUM_FLIGHT_RECOVERY_KNEE_FLEXION
+            <= value
+            <= MAXIMUM_FLIGHT_RECOVERY_KNEE_FLEXION
+            for value in flight_recovery_knee_flexion
+        ),
+        metrics["flight_recovery_chain"],
+        (
+            "knee_forward_of_hip "
+            f"{MINIMUM_FLIGHT_RECOVERY_KNEE_FORWARD}"
+            f"..{MAXIMUM_FLIGHT_RECOVERY_KNEE_FORWARD}; "
+            "ankle_behind_knee "
+            f"{MINIMUM_FLIGHT_RECOVERY_ANKLE_BEHIND_KNEE}"
+            f"..{MAXIMUM_FLIGHT_RECOVERY_ANKLE_BEHIND_KNEE}; "
+            "ankle_below_knee "
+            f"{MINIMUM_FLIGHT_RECOVERY_ANKLE_BELOW_KNEE}"
+            f"..{MAXIMUM_FLIGHT_RECOVERY_ANKLE_BELOW_KNEE}; "
+            "knee_flexion "
+            f"{MINIMUM_FLIGHT_RECOVERY_KNEE_FLEXION}"
+            f"..{MAXIMUM_FLIGHT_RECOVERY_KNEE_FLEXION}"
+        ),
     )
     check(
         "stance_pitch_progression",

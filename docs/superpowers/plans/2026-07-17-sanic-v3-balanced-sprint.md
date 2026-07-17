@@ -112,9 +112,29 @@ assert hand_root_relative_lateral_range <= 0.050
 assert first_last_pose_error <= 1e-4
 ```
 
+The flight-recovery silhouette has an additional conjunctive chain contract at
+`(7, L)` and `(15, R)`:
+
+```python
+assert 0.120 <= knee_forward_of_hip <= 0.220
+assert 0.180 <= ankle_behind_knee <= 0.225
+assert 0.050 <= ankle_below_knee <= 0.120
+assert 80.0 <= recovery_knee_flexion <= 115.0
+```
+
+This prevents a rearward knee and elevated ankle from folding the blue lower
+leg into a U-shaped loop beneath the recovery shoe. Source and GLB modes must
+apply the same four limits symmetrically.
+
 The torso check must use the evaluated sagittal angle from `hips.head` to `chest.tail` in degrees.
 
 Measure shoulder continuity from the angle between adjacent normalized world-space upper-arm directions. Count two frames as identical when that angle is below `0.05°`; use the same angular measurement for the `20°` adjacent-change ceiling.
+
+The legacy stride floor continues to use the terminal toe-tail projection.
+For export-parity diagnosis, compare the connected `foot.tail` / `toe.head`
+landmark and evaluated weighted-shoe bounds: glTF does not encode a terminal
+bone tail, so Blender reconstructs leaf-toe length on import even though the
+skin motion is unchanged.
 
 Print a compact JSON report containing every measured maximum/minimum and a final `SANIC_V3_RUN_VALIDATION=PASS` marker. On failure, print named metrics without dumping mesh data.
 
@@ -772,7 +792,7 @@ Expected: exactly 49 frames: the 16 unique intervals repeat three times, followe
 
 ```bash
 mkdir -p /home/alex/Downloads/SANIC-Meshy-v3
-SANIC_CORRECTED_BLEND=/home/alex/Downloads/SANIC-Meshy-v1/SANIC-meshy6-v1-corrected.blend \
+SANIC_CORRECTED_BLEND=/home/alex/Downloads/SANIC-Meshy-v3/SANIC-meshy6-v3-corrected.blend \
 SANIC_RIG_OUTPUT_DIR=/home/alex/Downloads/SANIC-Meshy-v3 \
 SANIC_RIG_VARIANT=v3-run \
 SANIC_RIG_BASENAME=SANIC-meshy6-v3-run \
