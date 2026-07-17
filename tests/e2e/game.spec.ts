@@ -1190,18 +1190,31 @@ test('fallback score sharing opens an encoded X intent and saves a PNG card', as
 test('failed score-card art falls back without reviving a stale run', async ({ page }) => {
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
+  const scoreCardFailures: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => {
     if (message.type() === 'error') {
       consoleErrors.push(`${message.location().url}: ${message.text()}`);
     }
   });
+  page.on('requestfailed', (request) => {
+    if (new URL(request.url()).pathname === '/media/sanic-score-card-bg.png') {
+      scoreCardFailures.push(request.failure()?.errorText ?? '');
+    }
+  });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
     Object.defineProperty(navigator, 'canShare', { configurable: true, value: undefined });
-    window.open = (() => null) as typeof window.open;
-    const browserWindow = window as typeof window & { __sanicScoreCardBlobCount: number };
+    const browserWindow = window as typeof window & {
+      __sanicOpenedUrl: string;
+      __sanicScoreCardBlobCount: number;
+    };
+    browserWindow.__sanicOpenedUrl = '';
     browserWindow.__sanicScoreCardBlobCount = 0;
+    window.open = ((url?: string | URL) => {
+      browserWindow.__sanicOpenedUrl = String(url ?? '');
+      return null;
+    }) as typeof window.open;
     const nativeToBlob = HTMLCanvasElement.prototype.toBlob;
     HTMLCanvasElement.prototype.toBlob = function toBlob(callback, type, quality) {
       nativeToBlob.call(this, (blob) => {
@@ -1219,11 +1232,7 @@ test('failed score-card art falls back without reviving a stale run', async ({ p
   await page.route('**/media/sanic-score-card-bg.png', async (route) => {
     scoreCardRequests += 1;
     if (scoreCardRequests === 1) await firstRequestGate;
-    await route.fulfill({
-      status: 200,
-      contentType: 'image/png',
-      body: 'not-an-image',
-    });
+    await route.abort('aborted');
   });
 
   await beginRun(page);
@@ -1238,14 +1247,25 @@ test('failed score-card art falls back without reviving a stale run', async ({ p
   await expect.poll(() => page.evaluate(() => (
     window as typeof window & { __sanicScoreCardBlobCount: number }
   ).__sanicScoreCardBlobCount)).toBe(1);
+  await expect.poll(() => scoreCardFailures.length).toBe(1);
+  expect(scoreCardFailures[0]).toBe('net::ERR_ABORTED');
   await expect(share).toBeDisabled();
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
   await expect.poll(() => page.evaluate(() => (
     window as typeof window & { __sanicScoreCardBlobCount: number }
   ).__sanicScoreCardBlobCount)).toBe(2);
+  await expect.poll(() => scoreCardFailures.length).toBe(2);
+  expect(scoreCardFailures).toEqual(['net::ERR_ABORTED', 'net::ERR_ABORTED']);
   await expect(share).toBeEnabled();
   await share.click();
+  const opened = await page.evaluate(() => (
+    window as typeof window & { __sanicOpenedUrl: string }
+  ).__sanicOpenedUrl);
+  const intent = new URL(opened);
+  expect(`${intent.origin}${intent.pathname}`).toBe('https://twitter.com/intent/tweet');
+  expect(intent.searchParams.get('text')).toMatch(/^I scored \d+ in \$SANIC\. I love to go fast\.$/);
+  expect(intent.searchParams.get('url')).toBe(`${new URL(page.url()).origin}/`);
   const save = page.getByRole('link', { name: 'SAVE SCORE CARD' });
   await expect(save).toBeVisible();
   expect((await save.getAttribute('href'))?.startsWith('blob:')).toBe(true);
@@ -1304,6 +1324,81 @@ test('native score sharing attaches a nonempty PNG with exact safe copy', async 
   expect(payload.name).toMatch(/^sanic-score-\d+\.png$/);
   expect(payload.text).toMatch(/^I scored \d+ in \$SANIC\. I love to go fast\.$/);
   expect(payload.url).toBe(`${new URL(page.url()).origin}/`);
+});
+
+test('failed score-card art attaches a fallback PNG through native sharing', async ({ page }) => {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  const scoreCardFailures: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(`${message.location().url}: ${message.text()}`);
+    }
+  });
+  page.on('requestfailed', (request) => {
+    if (new URL(request.url()).pathname === '/media/sanic-score-card-bg.png') {
+      scoreCardFailures.push(request.failure()?.errorText ?? '');
+    }
+  });
+  await page.route('**/media/sanic-score-card-bg.png', (route) => route.abort('aborted'));
+  await page.addInitScript(() => {
+    Object.defineProperty(window, '__sanicSharePayload', {
+      configurable: true,
+      writable: true,
+      value: null,
+    });
+    Object.defineProperty(navigator, 'canShare', {
+      configurable: true,
+      value: (data: ShareData) => Boolean(data.files?.[0]?.type === 'image/png'),
+    });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data: ShareData) => {
+        const file = data.files?.[0];
+        (window as typeof window & { __sanicSharePayload: unknown }).__sanicSharePayload = {
+          name: file?.name,
+          size: file?.size,
+          type: file?.type,
+          text: data.text,
+          url: data.url,
+        };
+      },
+    });
+  });
+
+  await beginRun(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  await expect.poll(() => scoreCardFailures.length).toBe(1);
+  expect(scoreCardFailures[0]).toBe('net::ERR_ABORTED');
+  await expect(page.getByRole('button', { name: 'SHARE SCORE' })).toBeEnabled();
+  await page.getByRole('button', { name: 'SHARE SCORE' }).click();
+  await expect.poll(async () => page.evaluate(() => (
+    window as typeof window & { __sanicSharePayload: {
+      readonly name?: string;
+      readonly size?: number;
+      readonly type?: string;
+      readonly text?: string;
+      readonly url?: string;
+    } | null }
+  ).__sanicSharePayload)).not.toBeNull();
+  const payload = await page.evaluate(() => (
+    window as typeof window & { __sanicSharePayload: {
+      readonly name?: string;
+      readonly size?: number;
+      readonly type?: string;
+      readonly text?: string;
+      readonly url?: string;
+    } }
+  ).__sanicSharePayload);
+  expect(payload.type).toBe('image/png');
+  expect(payload.size).toBeGreaterThan(0);
+  expect(payload.name).toMatch(/^sanic-score-\d+\.png$/);
+  expect(payload.text).toMatch(/^I scored \d+ in \$SANIC\. I love to go fast\.$/);
+  expect(payload.url).toBe(`${new URL(page.url()).origin}/`);
+  await expect(page.locator('[data-save-card]')).toBeHidden();
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
 });
 
 test('touch swipe changes lane and the pause dialog stays inside the viewport', async ({ page, isMobile }) => {
