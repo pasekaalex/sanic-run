@@ -47,6 +47,17 @@ const stageMarqueeMarkup = (): string => `
   </div>
 `;
 
+const titleLockupMarkup = (headingId: string, loading = false): string => `
+  <div class="title-lockup${loading ? ' title-lockup--loading' : ''}"
+    data-title-lockup${loading ? ' data-loading-title-lockup' : ''}>
+    <h1 id="${headingId}" aria-label="$SANIC">
+      <span class="title-coin" aria-hidden="true">$</span>
+      <span class="title-word" aria-hidden="true">SANIC</span>
+    </h1>
+    <p class="title-subtitle" aria-hidden="true">RING RUNNER</p>
+  </div>
+`;
+
 export class GameUI {
   private readonly loading: HTMLElement;
   private readonly loadingMeter: HTMLElement;
@@ -123,7 +134,7 @@ export class GameUI {
       <section class="loading-card" data-view="loading" aria-labelledby="loading-title">
         ${stageMarqueeMarkup()}
         <p class="kicker">RUNNING UP THE TRENCHES</p>
-        <h1 id="loading-title">$SANIC</h1>
+        ${titleLockupMarkup('loading-title', true)}
         <div class="loading-meter" role="progressbar" aria-label="Loading STAGE 01"
           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
           aria-valuetext="0% loaded"><span data-loading-bar></span></div>
@@ -133,13 +144,7 @@ export class GameUI {
       <section class="intro-panel" data-view="intro" aria-labelledby="intro-title" hidden>
         ${stageMarqueeMarkup()}
         <p class="kicker">${BRAND.tagline}</p>
-        <div class="title-lockup" data-title-lockup>
-          <h1 id="intro-title" aria-label="$SANIC">
-            <span class="title-coin" aria-hidden="true">$</span>
-            <span class="title-word" aria-hidden="true">SANIC</span>
-          </h1>
-          <p class="title-subtitle" aria-hidden="true">RING RUNNER</p>
-        </div>
+        ${titleLockupMarkup('intro-title')}
         <p class="context-banner" role="alert" data-context-banner hidden>SANIC HIT A DIMENSIONAL WALL</p>
         <div class="arcade-menu" data-arcade-menu>
           <span class="arcade-menu__cursor" aria-hidden="true">▶</span>

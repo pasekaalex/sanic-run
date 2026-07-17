@@ -146,6 +146,20 @@ test('boots as a stage-aware cartridge screen with accessible progress', async (
     await expect(ui).toHaveAttribute('data-arcade-shell', 'trench-circuit-94');
     await expect(ui).toHaveAttribute('data-phase', 'loading');
     await expect(page.locator('[data-view="loading"] [data-stage-label]')).toHaveText('STAGE 01');
+    const loadingTitle = page.locator('[data-view="loading"] [data-loading-title-lockup]');
+    await expect(loadingTitle.getByRole('heading', { name: '$SANIC' })).toBeVisible();
+    const loadingTitleStyle = await loadingTitle.evaluate((element) => {
+      const heading = getComputedStyle(element.querySelector('h1')!);
+      const word = getComputedStyle(element.querySelector('.title-word')!);
+      return {
+        transform: heading.transform,
+        fontFamily: heading.fontFamily,
+        titleFill: word.backgroundImage,
+      };
+    });
+    expect(loadingTitleStyle.transform).toBe('none');
+    expect(loadingTitleStyle.fontFamily).toContain('Press Start 2P');
+    expect(loadingTitleStyle.titleFill).toContain('linear-gradient');
     const progress = page.getByRole('progressbar', { name: 'Loading STAGE 01' });
     await expect(progress).toHaveAttribute('aria-valuemin', '0');
     await expect(progress).toHaveAttribute('aria-valuemax', '100');
@@ -298,6 +312,14 @@ test('uses a pixel UI shell without pixelating the WebGL game', async ({ page })
   }
   for (const font of styles.buttonFonts) expect(font).toContain('Press Start 2P');
   expect(styles.pixelFontLoaded).toBe(true);
+
+  await page.getByRole('button', { name: 'PRESS START' }).click();
+  await expect(ui).toHaveAttribute('data-phase', 'playing');
+  const shellOverlay = await ui.evaluate((element) => {
+    const style = getComputedStyle(element, '::after');
+    return { opacity: Number(style.opacity), visibility: style.visibility };
+  });
+  expect(shellOverlay).toEqual({ opacity: 0, visibility: 'hidden' });
 });
 
 test('loads every production GLB category without a silent fallback', async ({ page }) => {
@@ -338,9 +360,9 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
       chrome: style('.stage-marquee__chrome').backgroundImage,
       checker: style('.stage-marquee__checker').backgroundImage,
       ringRadius: style('.stage-marquee__ring').borderRadius,
-      titleFill: style('.title-word').backgroundImage,
+      titleFill: style('[data-view="intro"] .title-word').backgroundImage,
       cursorAnimation: style('.arcade-menu__cursor').animationName,
-      titleAnimation: style('.title-lockup').animationName,
+      titleAnimation: style('[data-view="intro"] .title-lockup').animationName,
     };
   });
   expect(shell.rootRaster).toContain('repeating-linear-gradient');
@@ -361,7 +383,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
       gridAnimation: style('.attract-stage__grid').animationName,
       checkerAnimation: style('.attract-stage__checker').animationName,
       ringAnimation: style('.pixel-ring').animationName,
-      titleAnimation: style('.title-lockup').animationName,
+      titleAnimation: style('[data-view="intro"] .title-lockup').animationName,
       promptAnimation: style('.arcade-menu__cursor').animationName,
       tickerAnimation: style('.meme-reel__track').animationName,
     };
@@ -374,6 +396,21 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
   expect(motion.titleAnimation).not.toBe('none');
   expect(motion.promptAnimation).not.toBe('none');
   expect(motion.tickerAnimation).not.toBe('none');
+
+  const ringScales = await page.locator('.pixel-ring--one').evaluate((ring) => {
+    const animation = ring.getAnimations()[0];
+    if (animation === undefined) throw new Error('Missing ring animation');
+    animation.pause();
+    return [0, 500, 1_000, 1_500].map((time) => {
+      animation.currentTime = time;
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(ring).transform);
+      return [
+        Math.round(Math.hypot(matrix.m11, matrix.m12) * 100) / 100,
+        Math.round(Math.hypot(matrix.m21, matrix.m22) * 100) / 100,
+      ];
+    });
+  });
+  expect(ringScales).toEqual([[1, 1], [1, 1], [1, 1], [1, 1]]);
 
   const reelOffsets = await page.locator('.meme-reel__track').evaluate((track) => {
     const animation = track.getAnimations()[0];
@@ -400,7 +437,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
       gridPlayState: style('.attract-stage__grid').animationPlayState,
       checkerPlayState: style('.attract-stage__checker').animationPlayState,
       ringPlayState: style('.pixel-ring').animationPlayState,
-      titlePlayState: style('.title-lockup').animationPlayState,
+      titlePlayState: style('[data-view="intro"] .title-lockup').animationPlayState,
       cursorPlayState: style('.arcade-menu__cursor').animationPlayState,
       marqueeCheckerPlayState: style('[data-view="intro"] .stage-marquee__checker').animationPlayState,
     };
@@ -569,7 +606,7 @@ test('disables themed transitions when reduced motion is requested', async ({ pa
     const grid = getComputedStyle(document.querySelector('.attract-stage__grid')!);
     const checker = getComputedStyle(document.querySelector('.attract-stage__checker')!);
     const ring = getComputedStyle(document.querySelector('.pixel-ring')!);
-    const title = getComputedStyle(document.querySelector('.title-lockup')!);
+    const title = getComputedStyle(document.querySelector('[data-view="intro"] .title-lockup')!);
     const prompt = getComputedStyle(document.querySelector('.arcade-menu__cursor')!);
     const ticker = getComputedStyle(document.querySelector('.meme-reel__track')!);
     return {
@@ -718,7 +755,7 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
       '.attract-stage__grid',
       '.attract-stage__checker',
       '.pixel-ring',
-      '.title-lockup',
+      '[data-view="intro"] .title-lockup',
       '.arcade-menu__cursor',
       '.meme-reel__track',
       '[data-view="intro"] .stage-marquee__checker',
@@ -747,7 +784,7 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
       '.attract-stage__grid',
       '.attract-stage__checker',
       '.pixel-ring',
-      '.title-lockup',
+      '[data-view="intro"] .title-lockup',
       '.arcade-menu__cursor',
       '.meme-reel__track',
       '[data-view="intro"] .stage-marquee__checker',
@@ -985,7 +1022,7 @@ test('short landscape keeps launch and legal controls scrollable', async ({ page
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(844);
 
   for (const ornament of [
-    page.locator('.title-subtitle'),
+    page.locator('[data-view="intro"] .title-subtitle'),
     page.locator('.arcade-score-strip'),
     page.locator('.attract-stage__ridge--far'),
     page.locator('.pixel-ring--two'),

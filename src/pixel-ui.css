@@ -63,8 +63,10 @@
   opacity: .72;
 }
 
-#app-ui[data-ui-theme='pixel-16'].is-playing::after {
-  opacity: .32;
+#app-ui[data-ui-theme='pixel-16'][data-phase='playing']::after {
+  visibility: hidden;
+  opacity: 0;
+  transition: none;
 }
 
 #app-ui[data-ui-theme='pixel-16'] .attract-stage {
@@ -290,7 +292,7 @@
     4px 0 0 var(--arcade-orange),
     -4px 0 0 var(--arcade-cream),
     0 5px 0 var(--arcade-ink);
-  animation: arcade-ring-step 2s steps(8, end) infinite;
+  animation: arcade-ring-step 2s steps(4, end) infinite;
 }
 
 #app-ui[data-ui-theme='pixel-16'] .pixel-ring--two {
@@ -404,7 +406,7 @@
   border: 5px solid var(--arcade-gold);
   border-radius: 50%;
   box-shadow: 3px 0 0 var(--arcade-orange), -2px 0 0 var(--arcade-cream);
-  animation: arcade-ring-step 2s steps(8, end) infinite;
+  animation: arcade-ring-step 2s steps(4, end) infinite;
 }
 
 #app-ui[data-ui-theme='pixel-16'] .title-lockup {
@@ -626,10 +628,8 @@
 }
 
 @keyframes arcade-ring-step {
-  0%, 100% { transform: rotate(0deg) scaleX(1); }
-  25% { transform: rotate(90deg) scaleX(.72); }
-  50% { transform: rotate(180deg) scaleX(.28); }
-  75% { transform: rotate(270deg) scaleX(.72); }
+  from { transform: rotate(0turn); }
+  to { transform: rotate(1turn); }
 }
 
 @keyframes meme-reel-cycle {
