@@ -333,7 +333,11 @@ test('presents one selected PRESS START action and complete stage identity', asy
   expect(contrastRatio(focus.outline, focus.background)).toBeGreaterThanOrEqual(3);
 });
 
-test('creates a melodic browser audio graph only after the Start gesture', async ({ page }) => {
+test('decodes an authored zone loop only after Start and reserves oscillators for effects', async ({ page }) => {
+  const musicResponses: string[] = [];
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname.startsWith('/music/')) musicResponses.push(response.url());
+  });
   await page.addInitScript(() => {
     const probe = {
       contexts: 0,
@@ -382,17 +386,22 @@ test('creates a melodic browser audio graph only after the Start gesture', async
     };
   });
 
-  expect(await readProbe()).toEqual({ contexts: 0, oscillatorTypes: [], bufferSources: 0 });
+  expect(await readProbe()).toEqual({
+    contexts: 0,
+    oscillatorTypes: [],
+    bufferSources: 0,
+  });
   await page.getByRole('button', { name: 'PRESS START' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
 
-  await expect.poll(readProbe).toMatchObject({ contexts: 1 });
+  await expect.poll(readProbe).toMatchObject({ contexts: 1, bufferSources: 2 });
+  await expect.poll(() => musicResponses.length).toBe(2);
   const probe = await readProbe();
   expect(probe.bufferSources).toBeGreaterThanOrEqual(2);
-  expect(probe.oscillatorTypes.length).toBeGreaterThanOrEqual(4);
-  expect(probe.oscillatorTypes).toContain('square');
-  expect(probe.oscillatorTypes).toContain('triangle');
-  expect(probe.oscillatorTypes).toContain('sine');
+  expect(probe.oscillatorTypes).toEqual([]);
+
+  await page.keyboard.press('Space');
+  await expect.poll(readProbe).toMatchObject({ oscillatorTypes: ['triangle'] });
 });
 
 test('uses a pixel UI shell without pixelating the WebGL game', async ({ page }) => {

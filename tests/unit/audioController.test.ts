@@ -185,6 +185,10 @@ class FakeAudioContext {
     return source;
   }
 
+  public decodeAudioData(_data: ArrayBuffer): Promise<FakeAudioBuffer> {
+    return Promise.resolve(new FakeAudioBuffer(4));
+  }
+
   public createGain(): FakeGainNode {
     this.failIfConfigured('gain');
     const gain = new FakeGainNode();
@@ -323,8 +327,18 @@ const installAudioContext = (context: FakeAudioContext): (() => number) => {
 afterEach(() => {
   restoreAudioContext?.();
   restoreAudioContext = null;
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
+
+const installMusicFetch = (): ReturnType<typeof vi.fn> => {
+  const fetcher = vi.fn(async () => ({
+    ok: true,
+    arrayBuffer: async () => Uint8Array.of(1).buffer,
+  } as Response));
+  vi.stubGlobal('fetch', fetcher);
+  return fetcher;
+};
 
 const invokeEffect = (audio: AudioController, effect: EffectName): void => {
   if (effect === 'pickup') {
@@ -394,20 +408,43 @@ describe('AudioController', () => {
     expect(context.oscillators).toHaveLength(0);
   });
 
-  it('starts once and enables melodic music plus synthesized effects', () => {
+  it('starts decoded authored music once and reserves oscillators for synthesized effects', async () => {
     const context = new FakeAudioContext();
     const constructions = installAudioContext(context);
+    installMusicFetch();
     const audio = new AudioController();
 
     audio.start();
     audio.start();
+    await vi.waitFor(() => {
+      expect(context.bufferSources.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(context.oscillators).toHaveLength(0);
+
     audio.jump();
 
     expect(constructions()).toBe(1);
     expect(context.bufferSources.length).toBeGreaterThanOrEqual(2);
     expect(context.bufferSources[0]?.started).toBe(1);
-    expect(context.oscillators.length).toBeGreaterThanOrEqual(5);
-    expect(context.oscillators.every(({ started }) => started === 1)).toBe(true);
+    expect(context.bufferSources[1]?.loop).toBe(true);
+    expect(context.oscillators).toHaveLength(1);
+    expect(context.oscillators[0]?.type).toBe('triangle');
+    audio.destroy();
+  });
+
+  it('uses the latest distance supplied before start for the first authored track', async () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const fetcher = installMusicFetch();
+    const audio = new AudioController();
+
+    expect(() => audio.setDistance(840)).not.toThrow();
+    audio.start();
+    await vi.waitFor(() => {
+      expect(fetcher).toHaveBeenCalled();
+    });
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/music/liquidity-loop.mp3');
     audio.destroy();
   });
 
@@ -656,19 +693,28 @@ describe('AudioController', () => {
     audio.destroy();
   });
 
-  it('resets music at game over and restarts it from bar one for the next run', () => {
+  it('resets decoded music at game over and restarts it from the beginning for the next run', async () => {
     const context = new FakeAudioContext();
     installAudioContext(context);
+    installMusicFetch();
     const audio = new AudioController();
 
     audio.start();
-    const firstPhraseVoices = context.oscillators.length;
-    audio.setIntensity(1);
+    await vi.waitFor(() => {
+      expect(context.bufferSources.length).toBeGreaterThanOrEqual(2);
+    });
+    const firstMusicSource = context.bufferSources[1];
     audio.gameOver();
     audio.restart();
 
-    expect(firstPhraseVoices).toBeGreaterThanOrEqual(4);
-    expect(context.oscillators.length).toBeGreaterThan(firstPhraseVoices);
+    expect(firstMusicSource?.stopped).toBeGreaterThan(0);
+    expect(context.bufferSources).toHaveLength(3);
+    expect(context.bufferSources[2]).toMatchObject({
+      buffer: firstMusicSource?.buffer,
+      loop: true,
+      started: 1,
+    });
+    expect(context.oscillators).toHaveLength(0);
     audio.destroy();
   });
 
@@ -785,24 +831,21 @@ describe('AudioController', () => {
     expect(context.closeCount).toBe(1);
   });
 
-  it('cleans wind and every bus when initial music graph creation fails', () => {
-    const context = new FakeAudioContext(false, false, true);
+  it('keeps the effects graph alive when initial authored music fetch fails', async () => {
+    const context = new FakeAudioContext();
     installAudioContext(context);
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('music unavailable');
+    }));
     const audio = new AudioController();
 
     expect(() => audio.start()).not.toThrow();
-    expect(context.closeCount).toBe(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(context.closeCount).toBe(0);
+    audio.jump();
+    expect(context.oscillators).toHaveLength(1);
     audio.destroy();
-
-    expect(context.bufferSources[0]?.stopped).toBe(1);
-    expect([
-      context.bufferSources[0]?.disconnected,
-      context.filters[0]?.disconnected,
-      context.gains[0]?.disconnected,
-      context.gains[1]?.disconnected,
-      context.gains[2]?.disconnected,
-      context.gains[3]?.disconnected,
-    ]).toEqual([true, true, true, true, true, true]);
     expect(context.closeCount).toBe(1);
   });
 });

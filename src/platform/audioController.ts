@@ -1,4 +1,4 @@
-import { MusicSequencer } from './musicSequencer';
+import { ZoneMusicPlayer } from './zoneMusicPlayer';
 
 const MASTER_GAIN = 0.16;
 const EFFECTS_GAIN = 0.95;
@@ -30,7 +30,7 @@ export class AudioController {
   private master: GainNode | null = null;
   private effectsBus: GainNode | null = null;
   private musicBus: GainNode | null = null;
-  private music: MusicSequencer | null = null;
+  private music: ZoneMusicPlayer | null = null;
   private wind: WindGraph | null = null;
   private readonly activeEffects = new Map<AudioScheduledSourceNode, EffectGraph>();
   private muted: boolean;
@@ -38,6 +38,7 @@ export class AudioController {
   private desiredMusicRunning = false;
   private stateSyncInFlight = false;
   private destroyed = false;
+  private musicDistance = 0;
   private readonly handleContextStateChange = (): void => {
     this.requestStateSync();
   };
@@ -62,7 +63,7 @@ export class AudioController {
     let master: GainNode | null = null;
     let effectsBus: GainNode | null = null;
     let musicBus: GainNode | null = null;
-    let music: MusicSequencer | null = null;
+    let music: ZoneMusicPlayer | null = null;
     let wind: WindGraph | null = null;
 
     try {
@@ -78,7 +79,8 @@ export class AudioController {
       master.connect(context.destination);
 
       wind = this.createWind(context, effectsBus);
-      music = new MusicSequencer(context, musicBus);
+      music = new ZoneMusicPlayer(context, musicBus);
+      music.setDistance(this.musicDistance);
       music.start();
       if (context.state !== 'running') music.pause();
       this.context = context;
@@ -191,9 +193,14 @@ export class AudioController {
     this.requestStateSync();
   }
 
-  public setIntensity(intensity: number): void {
+  public setDistance(distance: number): void {
     if (this.destroyed) return;
-    this.music?.setIntensity(intensity);
+    this.musicDistance = Number.isFinite(distance) ? Math.max(0, distance) : 0;
+    try {
+      this.music?.setDistance(this.musicDistance);
+    } catch {
+      // Per-step zone projection must never interrupt simulation.
+    }
   }
 
   public gameOver(): void {
@@ -274,7 +281,7 @@ export class AudioController {
     try {
       music.resume();
     } catch {
-      // Later synthesis failures silence music while effects and gameplay continue.
+      // Later music graph failures silence music while effects and gameplay continue.
       music.stop(false);
     }
   }

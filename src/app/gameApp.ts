@@ -181,7 +181,7 @@ export class GameApp {
     this.phase = 'playing';
     this.resetClocks();
     this.syncSnapshots();
-    this.syncAudioIntensity(this.currentSnapshot);
+    this.syncAudioZone(this.currentSnapshot);
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN STARTED');
@@ -219,10 +219,10 @@ export class GameApp {
     this.runId += 1;
     this.simulation.restart(this.e2eHarness?.seed ?? DEFAULT_SEED);
     this.phase = 'playing';
-    this.audio.restart();
     this.resetClocks();
     this.syncSnapshots();
-    this.syncAudioIntensity(this.currentSnapshot);
+    this.syncAudioZone(this.currentSnapshot);
+    this.audio.restart();
     this.ui.showPlaying(this.currentSnapshot, this.preferences.bestScore);
     this.focusGame();
     this.ui.announce('RUN RESTARTED');
@@ -381,7 +381,7 @@ export class GameApp {
     previous: Readonly<SimulationSnapshot>,
     current: Readonly<SimulationSnapshot>,
   ): void {
-    this.syncAudioIntensity(current);
+    this.syncAudioZone(current);
     if (jumpStarted(previous.jumpProgress, current.jumpProgress)) this.audio.jump();
     if (current.rings > previous.rings) this.audio.pickup(current.multiplier);
     if (previous.phase !== 'gameOver' && current.phase === 'gameOver') this.finishRun(current);
@@ -476,10 +476,8 @@ export class GameApp {
     this.previousSnapshot = this.currentSnapshot;
   }
 
-  private syncAudioIntensity(snapshot: Readonly<SimulationSnapshot>): void {
-    const speedRange = GAME.maxSpeed - GAME.startSpeed;
-    const intensity = speedRange > 0 ? (snapshot.speed - GAME.startSpeed) / speedRange : 0;
-    this.audio.setIntensity(intensity);
+  private syncAudioZone(snapshot: Readonly<SimulationSnapshot>): void {
+    this.audio.setDistance(snapshot.distance);
   }
 
   private resetClocks(): void {
