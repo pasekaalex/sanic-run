@@ -20,6 +20,11 @@ interface WindGraph {
   readonly gain: GainNode;
 }
 
+interface EffectGraph {
+  readonly source: AudioScheduledSourceNode;
+  readonly nodes: readonly AudioNode[];
+}
+
 export class AudioController {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -27,8 +32,10 @@ export class AudioController {
   private musicBus: GainNode | null = null;
   private music: MusicSequencer | null = null;
   private wind: WindGraph | null = null;
+  private readonly activeEffects = new Map<AudioScheduledSourceNode, EffectGraph>();
   private muted: boolean;
-  private desiredRunning = false;
+  private desiredContextRunning = false;
+  private desiredMusicRunning = false;
   private stateSyncInFlight = false;
   private destroyed = false;
   private readonly handleContextStateChange = (): void => {
@@ -41,7 +48,8 @@ export class AudioController {
 
   public start(): void {
     if (this.destroyed) return;
-    this.desiredRunning = true;
+    this.desiredContextRunning = true;
+    this.desiredMusicRunning = true;
 
     if (this.context !== null) {
       this.requestStateSync();
@@ -170,14 +178,16 @@ export class AudioController {
 
   public suspend(): void {
     if (this.destroyed) return;
-    this.desiredRunning = false;
+    this.desiredContextRunning = false;
+    this.desiredMusicRunning = false;
     this.music?.pause();
     this.requestStateSync();
   }
 
   public resume(): void {
     if (this.destroyed) return;
-    this.desiredRunning = true;
+    this.desiredContextRunning = true;
+    this.desiredMusicRunning = true;
     this.requestStateSync();
   }
 
@@ -188,12 +198,14 @@ export class AudioController {
 
   public gameOver(): void {
     if (this.destroyed) return;
+    this.desiredMusicRunning = false;
     this.music?.stop(true);
   }
 
   public restart(): void {
     if (this.destroyed) return;
-    this.desiredRunning = true;
+    this.desiredContextRunning = true;
+    this.desiredMusicRunning = true;
     this.music?.stop(true);
     this.requestStateSync();
   }
@@ -205,6 +217,7 @@ export class AudioController {
     const context = this.context;
     this.removeContextStateListener(context);
     this.music?.destroy();
+    this.cleanupActiveEffects();
     this.cleanupWind(this.wind);
     this.disconnect(this.musicBus);
     this.disconnect(this.effectsBus);
@@ -224,13 +237,13 @@ export class AudioController {
     const context = this.context;
     if (this.destroyed || context === null || context.state === 'closed' || this.stateSyncInFlight) return;
 
-    const requestedRunning = this.desiredRunning;
+    const requestedRunning = this.desiredContextRunning;
     this.syncMusicTransport(context);
     let transition: Promise<void>;
     try {
       if (requestedRunning && context.state !== 'running') {
         transition = context.resume();
-      } else if (!requestedRunning && context.state === 'running') {
+      } else if (!requestedRunning && context.state !== 'suspended') {
         transition = context.suspend();
       } else {
         return;
@@ -243,7 +256,7 @@ export class AudioController {
     void transition.catch(() => undefined).finally(() => {
       if (context !== this.context) return;
       this.stateSyncInFlight = false;
-      if (this.desiredRunning !== requestedRunning) {
+      if (this.desiredContextRunning !== requestedRunning) {
         this.requestStateSync();
         return;
       }
@@ -254,7 +267,7 @@ export class AudioController {
   private syncMusicTransport(context: AudioContext): void {
     const music = this.music;
     if (music === null) return;
-    if (!this.desiredRunning || context.state !== 'running') {
+    if (!this.desiredMusicRunning || context.state !== 'running') {
       music.pause();
       return;
     }
@@ -347,6 +360,39 @@ export class AudioController {
     }
   }
 
+  private trackEffect(source: AudioScheduledSourceNode, nodes: readonly AudioNode[]): void {
+    const graph: EffectGraph = Object.freeze({
+      source,
+      nodes: Object.freeze([...nodes]),
+    });
+    this.activeEffects.set(source, graph);
+    source.addEventListener('ended', () => {
+      this.releaseEffect(source);
+    }, { once: true });
+  }
+
+  private releaseEffect(source: AudioScheduledSourceNode): void {
+    const graph = this.activeEffects.get(source);
+    if (graph === undefined) return;
+    this.activeEffects.delete(source);
+    for (const node of graph.nodes) this.disconnect(node);
+  }
+
+  private cleanupEffect(
+    source: AudioScheduledSourceNode | null,
+    nodes: readonly (AudioNode | null)[],
+  ): void {
+    if (source !== null) this.activeEffects.delete(source);
+    this.stop(source);
+    for (const node of nodes) this.disconnect(node);
+  }
+
+  private cleanupActiveEffects(): void {
+    for (const graph of [...this.activeEffects.values()]) {
+      this.cleanupEffect(graph.source, graph.nodes);
+    }
+  }
+
   private tone(options: ToneOptions): void {
     const context = this.context;
     const effectsBus = this.effectsBus;
@@ -379,16 +425,11 @@ export class AudioController {
       envelope.connect(effectsBus);
       const createdOscillator = oscillator;
       const createdEnvelope = envelope;
-      oscillator.addEventListener('ended', () => {
-        this.disconnect(createdOscillator);
-        this.disconnect(createdEnvelope);
-      }, { once: true });
+      this.trackEffect(createdOscillator, [createdOscillator, createdEnvelope]);
       oscillator.start(start);
       oscillator.stop(end + 0.01);
     } catch {
-      this.stop(oscillator);
-      this.disconnect(oscillator);
-      this.disconnect(envelope);
+      this.cleanupEffect(oscillator, [oscillator, envelope]);
     }
   }
 
@@ -432,18 +473,11 @@ export class AudioController {
       const createdSource = source;
       const createdFilter = filter;
       const createdEnvelope = envelope;
-      source.addEventListener('ended', () => {
-        this.disconnect(createdSource);
-        this.disconnect(createdFilter);
-        this.disconnect(createdEnvelope);
-      }, { once: true });
+      this.trackEffect(createdSource, [createdSource, createdFilter, createdEnvelope]);
       source.start(now);
       source.stop(now + duration);
     } catch {
-      this.stop(source);
-      this.disconnect(source);
-      this.disconnect(filter);
-      this.disconnect(envelope);
+      this.cleanupEffect(source, [source, filter, envelope]);
     }
   }
 }

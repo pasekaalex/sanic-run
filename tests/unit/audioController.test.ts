@@ -15,6 +15,7 @@ type FailurePoint =
   | 'stop';
 
 type EffectName = 'pickup' | 'jump' | 'lane' | 'impact';
+type FakeAudioContextState = AudioContextState | 'interrupted';
 
 class FakeAudioParam {
   public readonly scheduled: ScheduledValue[] = [];
@@ -46,6 +47,7 @@ class FakeAudioParam {
 
 class FakeAudioNode {
   public readonly connections: unknown[] = [];
+  public disconnectCount = 0;
   public disconnected = false;
 
   public connect(destination: unknown): unknown {
@@ -54,6 +56,7 @@ class FakeAudioNode {
   }
 
   public disconnect(): void {
+    this.disconnectCount += 1;
     this.disconnected = true;
   }
 }
@@ -96,6 +99,10 @@ class FakeScheduledSourceNode extends FakeAudioNode {
     if (type === 'ended') this.endedListeners.push(listener);
   }
 
+  public dispatchEnded(): void {
+    for (const listener of this.endedListeners.splice(0)) listener();
+  }
+
   public start(): void {
     this.started += 1;
     if (this.throwOnStart) throw new Error('source start failed');
@@ -105,7 +112,6 @@ class FakeScheduledSourceNode extends FakeAudioNode {
   public stop(): void {
     this.stopped += 1;
     this.fail('stop');
-    for (const listener of this.endedListeners) listener();
   }
 }
 
@@ -130,11 +136,12 @@ class FakeAudioContext {
   public closeCount = 0;
   public resumeCount = 0;
   public suspendCount = 0;
-  public state: AudioContextState;
+  public state: FakeAudioContextState;
   private deferredResume = false;
   private failure: { point: FailurePoint; skippedMatches: number } | null = null;
   private readonly pendingResumeResolutions: Array<() => void> = [];
   private readonly pendingSuspendResolutions: Array<() => void> = [];
+  private stateBeforeInterruption: 'running' | 'suspended' | null = null;
   private readonly stateChangeListeners = new Set<() => void>();
 
   public constructor(
@@ -142,7 +149,7 @@ class FakeAudioContext {
     private readonly deferSuspend = false,
     private readonly throwOnMusicStart = false,
     private readonly rejectResume = false,
-    initialState: AudioContextState = 'running',
+    initialState: FakeAudioContextState = 'running',
   ) {
     this.state = initialState;
   }
@@ -207,6 +214,16 @@ class FakeAudioContext {
     this.failure = { point, skippedMatches };
   }
 
+  public interrupt(): void {
+    if (this.state !== 'running') return;
+    this.stateBeforeInterruption = 'running';
+    this.setState('interrupted');
+  }
+
+  public pendingFailure(): FailurePoint | null {
+    return this.failure?.point ?? null;
+  }
+
   public removeEventListener(type: string, listener: () => void): void {
     if (type === 'statechange') this.stateChangeListeners.delete(listener);
   }
@@ -233,15 +250,19 @@ class FakeAudioContext {
 
   public suspend(): Promise<void> {
     this.suspendCount += 1;
+    const complete = (): void => {
+      if (this.state === 'interrupted') this.stateBeforeInterruption = 'suspended';
+      this.setState('suspended');
+    };
     if (this.deferSuspend) {
       return new Promise((resolve) => {
         this.pendingSuspendResolutions.push(() => {
-          this.setState('suspended');
+          complete();
           resolve();
         });
       });
     }
-    this.setState('suspended');
+    complete();
     return Promise.resolve();
   }
 
@@ -249,10 +270,14 @@ class FakeAudioContext {
     for (const resolve of this.pendingSuspendResolutions.splice(0)) resolve();
   }
 
-  public setState(state: AudioContextState): void {
+  public setState(state: FakeAudioContextState): void {
     if (this.state === state) return;
     this.state = state;
     this.dispatchStateChange();
+  }
+
+  public stateBeforeInterruptionValue(): 'running' | 'suspended' | null {
+    return this.stateBeforeInterruption;
   }
 
   public stateListenerCount(): number {
@@ -325,6 +350,19 @@ const captureCreatedNodes = (
   gains: context.gains.slice(before.gains),
   oscillators: context.oscillators.slice(before.oscillators),
 });
+
+const nodeCountDelta = (
+  context: FakeAudioContext,
+  before: ReturnType<typeof captureNodeCounts>,
+) => {
+  const after = captureNodeCounts(context);
+  return {
+    bufferSources: after.bufferSources - before.bufferSources,
+    filters: after.filters - before.filters,
+    gains: after.gains - before.gains,
+    oscillators: after.oscillators - before.oscillators,
+  };
+};
 
 const expectCreatedNodesReleased = (
   created: ReturnType<typeof captureCreatedNodes>,
@@ -422,6 +460,34 @@ describe('AudioController', () => {
     await vi.waitFor(() => {
       expect(context.resumeCount).toBe(1);
       expect(context.state).toBe('running');
+    });
+    audio.destroy();
+  });
+
+  it('serializes an app pause through native suspend while the context is interrupted', async () => {
+    const context = new FakeAudioContext(false, true);
+    installAudioContext(context);
+    const audio = new AudioController();
+    context.addEventListener('statechange', () => {
+      if (context.state === 'interrupted') audio.suspend();
+    });
+
+    audio.start();
+    context.interrupt();
+    expect(context.state).toBe('interrupted');
+    expect(context.stateBeforeInterruptionValue()).toBe('running');
+
+    audio.suspend();
+    context.dispatchStateChange();
+    expect(context.suspendCount).toBe(1);
+    expect(context.resumeCount).toBe(0);
+
+    context.resolvePendingSuspends();
+    await vi.waitFor(() => {
+      expect(context.state).toBe('suspended');
+      expect(context.stateBeforeInterruptionValue()).toBe('suspended');
+      expect(context.suspendCount).toBe(1);
+      expect(context.resumeCount).toBe(0);
     });
     audio.destroy();
   });
@@ -538,14 +604,14 @@ describe('AudioController', () => {
   });
 
   it.each([
-    ['buffer-source', 0],
-    ['filter', 0],
-    ['gain', 1],
-    ['start', 1],
-    ['stop', 1],
+    ['buffer-source', 0, { bufferSources: 0, filters: 0, gains: 1, oscillators: 1 }],
+    ['filter', 0, { bufferSources: 1, filters: 0, gains: 1, oscillators: 1 }],
+    ['gain', 1, { bufferSources: 1, filters: 1, gains: 1, oscillators: 1 }],
+    ['start', 1, { bufferSources: 1, filters: 1, gains: 2, oscillators: 1 }],
+    ['stop', 1, { bufferSources: 1, filters: 1, gains: 2, oscillators: 1 }],
   ] as const)(
     'impact contains a later noise %s failure and releases partial effect nodes',
-    (failure, skippedMatches) => {
+    (failure, skippedMatches, expectedDelta) => {
       const context = new FakeAudioContext();
       installAudioContext(context);
       const audio = new AudioController();
@@ -560,9 +626,13 @@ describe('AudioController', () => {
         thrown = error;
       }
       const created = captureCreatedNodes(context, before);
+      const delta = nodeCountDelta(context, before);
+      const pendingFailure = context.pendingFailure();
       audio.destroy();
 
       expect(thrown).toBeUndefined();
+      expect(pendingFailure).toBeNull();
+      expect(delta).toEqual(expectedDelta);
       expectCreatedNodesReleased(created);
     },
   );
@@ -600,6 +670,77 @@ describe('AudioController', () => {
     expect(firstPhraseVoices).toBeGreaterThanOrEqual(4);
     expect(context.oscillators.length).toBeGreaterThan(firstPhraseVoices);
     audio.destroy();
+  });
+
+  it('keeps the effects context recoverable at game over without restarting music', async () => {
+    vi.useFakeTimers();
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    audio.gameOver();
+    const voicesAfterGameOver = context.oscillators.length;
+    expect(vi.getTimerCount()).toBe(0);
+
+    context.deferNextResume();
+    context.setState('suspended');
+    expect(context.resumeCount).toBe(1);
+    context.resolvePendingResumes();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(context.state).toBe('running');
+    expect(context.oscillators).toHaveLength(voicesAfterGameOver);
+    expect(vi.getTimerCount()).toBe(0);
+
+    audio.impact();
+    expect(context.oscillators).toHaveLength(voicesAfterGameOver + 1);
+    audio.destroy();
+  });
+
+  it('releases transient effect graphs at destroy without double cleanup', () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    const before = captureNodeCounts(context);
+    audio.impact();
+    const created = captureCreatedNodes(context, before);
+    expect(created.bufferSources).toHaveLength(1);
+    expect(created.filters).toHaveLength(1);
+    expect(created.gains).toHaveLength(2);
+    expect(created.oscillators).toHaveLength(1);
+    for (const node of [
+      ...created.bufferSources,
+      ...created.filters,
+      ...created.gains,
+      ...created.oscillators,
+    ]) {
+      expect(node.disconnected).toBe(false);
+    }
+
+    audio.destroy();
+    for (const source of [...created.bufferSources, ...created.oscillators]) {
+      expect(source.stopped).toBe(2);
+      expect(source.disconnectCount).toBe(1);
+    }
+    for (const node of [...created.filters, ...created.gains]) {
+      expect(node.disconnectCount).toBe(1);
+    }
+
+    for (const source of [...created.bufferSources, ...created.oscillators]) {
+      source.dispatchEnded();
+    }
+    for (const node of [
+      ...created.bufferSources,
+      ...created.filters,
+      ...created.gains,
+      ...created.oscillators,
+    ]) {
+      expect(node.disconnectCount).toBe(1);
+    }
   });
 
   it('stops and disconnects the complete audio graph before closing once', () => {
