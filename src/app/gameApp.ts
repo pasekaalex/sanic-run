@@ -1,6 +1,6 @@
 import { BRAND, GAME } from '../config';
-import { GameSimulation, type SpawnSource } from '../game/simulation';
-import type { GameCommand, SimulationSnapshot, SpawnRow } from '../game/types';
+import { GameSimulation } from '../game/simulation';
+import type { GameCommand, SimulationSnapshot } from '../game/types';
 import { jumpStarted } from '../render/animationTiming';
 import { AudioController } from '../platform/audioController';
 import { InputController } from '../platform/inputController';
@@ -14,56 +14,14 @@ import {
   getScoreRank,
   renderScoreCard,
 } from '../ui/scoreCard';
+import { createE2EHarness, type E2EHarness } from './e2eHarness';
 
 const MAX_FRAME_SECONDS = 0.25;
 const UI_INTERVAL_MS = 50;
-const E2E_CRASH_EVENT = 'sanic:e2e-crash';
-const E2E_GUARD_STEPS = 4_000;
+const DEFAULT_SEED = 0x5a11c;
 const DEFAULT_CRASH_DURATION_SECONDS = 1;
 const CRASH_SETTLE_FRAME_MS = 50;
 const IMPACT_SUSPEND_MS = 360;
-
-const freezeRow = (row: SpawnRow): SpawnRow => Object.freeze({
-  ...row,
-  coins: Object.freeze([...row.coins]),
-  obstacles: Object.freeze([...row.obstacles]),
-});
-
-const E2E_ROWS: readonly SpawnRow[] = Object.freeze([
-  freezeRow({
-    id: 'e2e-center',
-    at: 300,
-    coins: [],
-    obstacles: [Object.freeze({ id: 'e2e-obstacle-center', lane: 0, kind: 'fud', jumpable: false })],
-  }),
-  freezeRow({
-    id: 'e2e-left',
-    at: 306,
-    coins: [],
-    obstacles: [Object.freeze({ id: 'e2e-obstacle-left', lane: -1, kind: 'candle', jumpable: false })],
-  }),
-  freezeRow({
-    id: 'e2e-right',
-    at: 312,
-    coins: [],
-    obstacles: [Object.freeze({ id: 'e2e-obstacle-right', lane: 1, kind: 'log', jumpable: false })],
-  }),
-]);
-
-class E2ESpawnSource implements SpawnSource {
-  public takeUntil(maxDistance: number): readonly SpawnRow[] {
-    return E2E_ROWS.filter(({ at }) => at <= maxDistance);
-  }
-}
-
-const readSeed = (
-  parameters: URLSearchParams,
-  allowTestOverrides: boolean,
-): number => {
-  if (!allowTestOverrides) return 0x5a11c;
-  const value = Number(parameters.get('seed'));
-  return Number.isSafeInteger(value) ? value : 0x5a11c;
-};
 
 const supportsWebGL2 = (): boolean => {
   try {
@@ -82,11 +40,9 @@ const supportsWebGL2 = (): boolean => {
 };
 
 export class GameApp {
-  private readonly parameters = new URLSearchParams(window.location.search);
-  private readonly allowTestOverrides = import.meta.env.DEV
-    || import.meta.env.MODE === 'e2e';
-  private readonly testMode = this.allowTestOverrides
-    && this.parameters.get('e2e') === '1';
+  private readonly e2eHarness: E2EHarness | null = import.meta.env.MODE === 'e2e'
+    ? createE2EHarness(new URLSearchParams(window.location.search))
+    : null;
   private readonly simulation: GameSimulation;
   private readonly audio: AudioController;
   private readonly input: InputController;
@@ -117,10 +73,9 @@ export class GameApp {
     root: HTMLElement,
   ) {
     this.preferences = loadPreferences();
-    const source = this.testMode ? new E2ESpawnSource() : undefined;
     this.simulation = new GameSimulation(
-      readSeed(this.parameters, this.allowTestOverrides),
-      source,
+      this.e2eHarness?.seed ?? DEFAULT_SEED,
+      this.e2eHarness?.source,
     );
     this.previousSnapshot = this.simulation.snapshot();
     this.currentSnapshot = this.previousSnapshot;
@@ -142,9 +97,11 @@ export class GameApp {
 
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     window.addEventListener('blur', this.handleWindowBlur);
-    if (this.testMode) {
-      window.addEventListener(E2E_CRASH_EVENT, this.handleE2ECrash);
-    }
+    this.e2eHarness?.attachCrashHandler(this.simulation, (previous, current) => {
+      this.previousSnapshot = previous;
+      this.currentSnapshot = current;
+      this.afterStep(previous, current);
+    });
   }
 
   public async initialize(): Promise<void> {
@@ -153,7 +110,7 @@ export class GameApp {
     this.ui.setLoading(0);
 
     if (
-      (this.allowTestOverrides && this.parameters.get('forceFallback') === '1')
+      this.e2eHarness?.simulateUnsupported === true
       || !supportsWebGL2()
     ) {
       if (!this.destroyed && initializationId === this.initializationId) {
@@ -184,9 +141,9 @@ export class GameApp {
       this.renderer = new WorldRenderer(this.canvas, assets, {
         onContextLost: this.handleContextLost,
         onContextRestored: this.handleContextRestored,
-        enableTestProbes: this.testMode,
+        enableTestProbes: this.e2eHarness?.testProbes === true,
       });
-      this.renderer.setLowEffects(this.preferences.lowEffects || this.testMode);
+      this.renderer.setLowEffects(this.preferences.lowEffects || this.e2eHarness?.lowEffects === true);
       this.phase = 'intro';
       this.ui.showIntro();
       this.startLoop();
@@ -206,7 +163,7 @@ export class GameApp {
     this.clearCrashSequence();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('blur', this.handleWindowBlur);
-    window.removeEventListener(E2E_CRASH_EVENT, this.handleE2ECrash);
+    this.e2eHarness?.destroy();
     this.input.destroy();
     this.audio.destroy();
     this.renderer?.destroy();
@@ -260,7 +217,7 @@ export class GameApp {
     this.clearCrashSequence();
     this.clearScoreCard();
     this.runId += 1;
-    this.simulation.restart(readSeed(this.parameters, this.allowTestOverrides));
+    this.simulation.restart(this.e2eHarness?.seed ?? DEFAULT_SEED);
     this.phase = 'playing';
     this.audio.restart();
     this.resetClocks();
@@ -512,20 +469,6 @@ export class GameApp {
     this.contextAvailable = true;
     this.ui.setContextAvailable(true);
     this.ui.announce('DIMENSION RESTORED — PRESS RESUME');
-  };
-
-  private readonly handleE2ECrash = (): void => {
-    if (this.destroyed || this.phase !== 'playing') return;
-    let steps = 0;
-    while (this.simulation.snapshot().phase === 'playing' && steps < E2E_GUARD_STEPS) {
-      const previous = this.simulation.snapshot();
-      this.simulation.step(GAME.fixedStep);
-      const current = this.simulation.snapshot();
-      this.previousSnapshot = previous;
-      this.currentSnapshot = current;
-      this.afterStep(previous, current);
-      steps += 1;
-    }
   };
 
   private syncSnapshots(): void {

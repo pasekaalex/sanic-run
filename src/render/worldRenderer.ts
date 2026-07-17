@@ -49,6 +49,10 @@ import {
   jumpPresentation,
   runTimeScale,
 } from './animationTiming';
+import {
+  createCharacterPoseProbeUpdater,
+  type CharacterPoseProbeUpdater,
+} from './characterPoseProbe';
 import { uniformScaleForHeight } from './modelScale';
 import { nextSpinRotation } from './spinPresentation';
 
@@ -77,19 +81,6 @@ interface Particle {
   readonly size: number;
 }
 
-interface CharacterPoseProbe {
-  readonly root: Object3D;
-  readonly hips: Object3D;
-  readonly chest: Object3D;
-  readonly leftFoot: Object3D;
-  readonly rightFoot: Object3D;
-  readonly rootPosition: Vector3;
-  readonly hipsPosition: Vector3;
-  readonly chestPosition: Vector3;
-  readonly leftFootPosition: Vector3;
-  readonly rightFootPosition: Vector3;
-}
-
 const ZERO = new Vector3();
 const IDENTITY_QUATERNION = new Quaternion();
 const UNIT_SCALE = new Vector3(1, 1, 1);
@@ -111,31 +102,6 @@ const hash01 = (value: number): number => {
 const materialAt = (material: Material | Material[], index: number): Material => (
   Array.isArray(material) ? material[index] ?? material[0]! : material
 );
-
-const createCharacterPoseProbe = (
-  character: Group,
-  enabled: boolean,
-): CharacterPoseProbe | null => {
-  if (!enabled) return null;
-  const root = character.getObjectByName('root');
-  const hips = character.getObjectByName('hips');
-  const chest = character.getObjectByName('chest');
-  const leftFoot = character.getObjectByName('footL');
-  const rightFoot = character.getObjectByName('footR');
-  if (!root || !hips || !chest || !leftFoot || !rightFoot) return null;
-  return {
-    root,
-    hips,
-    chest,
-    leftFoot,
-    rightFoot,
-    rootPosition: new Vector3(),
-    hipsPosition: new Vector3(),
-    chestPosition: new Vector3(),
-    leftFootPosition: new Vector3(),
-    rightFootPosition: new Vector3(),
-  };
-};
 
 const geometryComponent = (
   source: BufferGeometry,
@@ -297,7 +263,7 @@ export class WorldRenderer {
   private readonly instances = new Group();
   private readonly particles = new Group();
   private readonly character: Group;
-  private readonly poseProbe: CharacterPoseProbe | null;
+  private readonly updateTestPoseProbe: CharacterPoseProbeUpdater;
   private readonly spinBall: Object3D;
   private readonly mixer: AnimationMixer;
   private readonly actions = new Map<CharacterActionName, AnimationAction>();
@@ -381,10 +347,10 @@ export class WorldRenderer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     });
-    this.poseProbe = createCharacterPoseProbe(
-      this.character,
-      this.options.enableTestProbes === true,
-    );
+    this.updateTestPoseProbe = import.meta.env.MODE === 'e2e'
+      && this.options.enableTestProbes === true
+      ? createCharacterPoseProbeUpdater(this.canvas, this.character)
+      : (): void => undefined;
     this.spinBall = assets.spinBall;
     this.spinBall.name ||= 'SANIC_SpinBall';
     const spinBounds = new Box3().setFromObject(this.spinBall);
@@ -713,42 +679,7 @@ export class WorldRenderer {
       jump.time = jumpClipTime(jump.getClip().duration, jumpProgress);
       this.mixer.update(0);
     }
-    this.updatePoseProbe();
-  }
-
-  private updatePoseProbe(): void {
-    const probe = this.poseProbe;
-    if (probe === null) return;
-    this.character.updateMatrixWorld(true);
-    const root = this.character.worldToLocal(
-      probe.root.getWorldPosition(probe.rootPosition),
-    );
-    const hips = this.character.worldToLocal(
-      probe.hips.getWorldPosition(probe.hipsPosition),
-    );
-    const chest = this.character.worldToLocal(
-      probe.chest.getWorldPosition(probe.chestPosition),
-    );
-    const leftFoot = this.character.worldToLocal(
-      probe.leftFoot.getWorldPosition(probe.leftFootPosition),
-    );
-    const rightFoot = this.character.worldToLocal(
-      probe.rightFoot.getWorldPosition(probe.rightFootPosition),
-    );
-    const bodyLeanDegrees = MathUtils.radToDeg(
-      Math.atan2(chest.z - hips.z, chest.y - hips.y),
-    );
-    this.canvas.dataset.poseProbe = [
-      root.y,
-      root.z,
-      chest.y,
-      chest.z,
-      leftFoot.y,
-      leftFoot.z,
-      rightFoot.y,
-      rightFoot.z,
-      bodyLeanDegrees,
-    ].map((value) => value.toFixed(5)).join(',');
+    this.updateTestPoseProbe(desired, this.actions.get(desired));
   }
 
   private updateRings(snapshot: Readonly<SimulationSnapshot>, distance: number): void {

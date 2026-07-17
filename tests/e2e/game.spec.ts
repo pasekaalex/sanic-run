@@ -1,7 +1,43 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const CONTRACT = 'CMNDT7PK5gHY8ZknhzEC2Q7UMDs2b7LT6c1eX7Kepump';
 const PUMP_URL = `https://pump.fun/coin/${CONTRACT}`;
+const JSON_CHUNK_TYPE = 0x4e4f534a;
+
+const readCrashClipDuration = (): number => {
+  const glb = readFileSync(resolve('public/models/sanic-runner.glb'));
+  let offset = 12;
+  let json: {
+    readonly animations?: readonly {
+      readonly name?: string;
+      readonly samplers: readonly { readonly input: number }[];
+    }[];
+    readonly accessors?: readonly { readonly max?: readonly number[] }[];
+  } | null = null;
+
+  while (offset < glb.length) {
+    const chunkLength = glb.readUInt32LE(offset);
+    const chunkType = glb.readUInt32LE(offset + 4);
+    if (chunkType === JSON_CHUNK_TYPE) {
+      json = JSON.parse(glb.toString('utf8', offset + 8, offset + 8 + chunkLength));
+      break;
+    }
+    offset += 8 + chunkLength;
+  }
+
+  const crash = json?.animations?.find(({ name }) => name === 'Crash');
+  const endpoint = crash?.samplers.reduce((maximum, { input }) => (
+    Math.max(maximum, json?.accessors?.[input]?.max?.[0] ?? Number.NEGATIVE_INFINITY)
+  ), Number.NEGATIVE_INFINITY);
+  if (endpoint === undefined || !Number.isFinite(endpoint) || endpoint <= 0) {
+    throw new Error('Crash clip has no independently readable endpoint');
+  }
+  return endpoint;
+};
+
+const CRASH_CLIP_DURATION = readCrashClipDuration();
 
 const parseCssColor = (color: string): readonly [number, number, number] => {
   const value = color.trim();
@@ -1163,26 +1199,14 @@ test('timer completion clamps the Crash mixer when RAF is throttled', async ({ p
   const canvas = page.locator('#game-canvas');
   const results = page.getByRole('dialog', { name: 'GAME OVER' });
 
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
-  await expect(results).toBeVisible({ timeout: 2_500 });
-  const normalFinalPose = (await canvas.getAttribute('data-pose-probe'))
-    ?.split(',')
-    .map(Number);
-  expect(normalFinalPose).toHaveLength(9);
-
-  await page.getByRole('button', { name: /^run it back$/i }).click();
-  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
   await freezeGameLoop(page);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
   await expect(results).toBeVisible({ timeout: 2_500 });
-  const throttledFinalPose = (await canvas.getAttribute('data-pose-probe'))
-    ?.split(',')
-    .map(Number);
-  expect(throttledFinalPose).toHaveLength(9);
-
-  for (let index = 0; index < normalFinalPose!.length; index += 1) {
-    expect(throttledFinalPose![index]).toBeCloseTo(normalFinalPose![index]!, 4);
-  }
+  await expect(canvas).toHaveAttribute('data-character-action', 'Crash');
+  const endpoint = Number(await canvas.getAttribute('data-character-action-time'));
+  const runtimeDuration = Number(await canvas.getAttribute('data-character-action-duration'));
+  expect(runtimeDuration).toBeCloseTo(CRASH_CLIP_DURATION, 5);
+  expect(endpoint).toBeCloseTo(CRASH_CLIP_DURATION, 5);
 });
 
 test('pause stops the game RAF and resume owns exactly one loop', async ({ page }) => {

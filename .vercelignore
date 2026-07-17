@@ -16,4 +16,5 @@ playwright-report/
 output/
 dist/
 dist-e2e/
+dist-adversarial/
 *.tsbuildinfo

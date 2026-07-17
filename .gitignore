@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 dist/
 dist-e2e/
+dist-adversarial/
 *.tsbuildinfo
 .vercel/
 .worktrees/

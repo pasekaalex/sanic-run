@@ -5,13 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:e2e": "vite --mode e2e",
     "build": "tsc -b && vite build",
     "build:e2e": "tsc -b && vite build --mode e2e --outDir dist-e2e",
+    "build:production-adversarial": "tsc -b && NODE_ENV=development vite build --outDir dist-adversarial",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:production": "npm run build && playwright test --config=playwright.production.config.ts",
+    "test:e2e:production:normal": "npm run build && playwright test --config=playwright.production.config.ts --workers=1",
+    "test:e2e:production:adversarial": "npm run build:production-adversarial && SANIC_PRODUCTION_OUT_DIR=dist-adversarial playwright test --config=playwright.production.config.ts --workers=1",
+    "test:e2e:production": "npm run test:e2e:production:normal && npm run test:e2e:production:adversarial",
     "check": "npm run test && npm run build && npm run test:e2e && npm run test:e2e:production"
   },
   "dependencies": {
