@@ -1,4 +1,4 @@
-import { BRAND } from '../config';
+import { ASSET_URLS, BRAND } from '../config';
 import type { SimulationSnapshot } from '../game/types';
 import type { ScoreRank } from './scoreCard';
 import { getScoreRank } from './scoreCard';
@@ -229,7 +229,7 @@ export class GameUI {
       </dialog>
 
       <section class="unsupported-panel" data-view="unsupported" hidden aria-labelledby="unsupported-title">
-        <img src="/media/sanic-game-promo.png" alt="Buff blue Sanic charging through a forest of gold rings" data-unsupported-promo>
+        <img data-src="${ASSET_URLS.promo}" alt="Buff blue Sanic charging through a forest of gold rings" data-unsupported-promo>
         <div class="unsupported-panel__scrim"></div>
         <div class="unsupported-panel__content">
           ${stageMarqueeMarkup()}
@@ -330,6 +330,10 @@ export class GameUI {
     this.setPhase('unsupported');
     this.closeDialogs(false);
     this.unsupportedReason.textContent = reason;
+    if (!this.unsupportedPromo.hasAttribute('src')) {
+      const promoUrl = this.unsupportedPromo.dataset.src;
+      if (promoUrl !== undefined) this.unsupportedPromo.src = promoUrl;
+    }
     this.unsupportedPromo.hidden = false;
   }
 

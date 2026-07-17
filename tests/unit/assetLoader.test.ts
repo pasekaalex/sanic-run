@@ -170,6 +170,104 @@ describe('AssetLoader', () => {
     expect(progress.every((value, index) => index === 0 || value >= progress[index - 1]!)).toBe(true);
   });
 
+  it('settles every category within the documented 20-second ceiling when one request hangs', async () => {
+    vi.useFakeTimers();
+    try {
+      const fixtures: Record<string, GltfLike> = {
+        [ASSET_URLS.spinBall]: spinBallGltf(),
+        [ASSET_URLS.ring]: ringGltf(),
+        [ASSET_URLS.forest]: forestGltf(),
+      };
+      const progress: number[] = [];
+      const loader = new AssetLoader({
+        loadAsync: vi.fn((url: string) => {
+          if (url === ASSET_URLS.character) {
+            return new Promise<GltfLike>(() => undefined);
+          }
+          return Promise.resolve(fixtures[url]!);
+        }),
+      });
+      let result: Awaited<ReturnType<AssetLoader['load']>> | undefined;
+      void loader.load((value) => progress.push(value)).then((assets) => {
+        result = assets;
+      });
+
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(result).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result?.fallback).toEqual({
+        character: true,
+        spinBall: false,
+        ring: false,
+        forest: false,
+      });
+      expect(result?.character.name).toBe('SANIC_Fallback');
+      expect(progress.at(-1)).toBe(1);
+      expect(progress.filter((value) => value === 1)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores progress and settlement from category requests that finish after the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      let reportLateCharacter = (_event: ProgressEvent): void => undefined;
+      let reportLateForest = (_event: ProgressEvent): void => undefined;
+      let resolveLateCharacter = (_value: GltfLike): void => undefined;
+      let rejectLateForest = (_error: Error): void => undefined;
+      const loader = new AssetLoader({
+        loadAsync: vi.fn((
+          url: string,
+          onProgress?: (event: ProgressEvent) => void,
+        ) => {
+          if (url === ASSET_URLS.character) {
+            reportLateCharacter = onProgress ?? reportLateCharacter;
+            return new Promise<GltfLike>((resolve) => {
+              resolveLateCharacter = resolve;
+            });
+          }
+          if (url === ASSET_URLS.forest) {
+            reportLateForest = onProgress ?? reportLateForest;
+            return new Promise<GltfLike>((_resolve, reject) => {
+              rejectLateForest = reject;
+            });
+          }
+          return Promise.resolve(url === ASSET_URLS.spinBall ? spinBallGltf() : ringGltf());
+        }),
+      });
+      const progress: number[] = [];
+      let result: Awaited<ReturnType<AssetLoader['load']>> | undefined;
+      void loader.load((value) => progress.push(value)).then((assets) => {
+        result = assets;
+      });
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(result?.fallback).toEqual({
+        character: true,
+        spinBall: false,
+        ring: false,
+        forest: true,
+      });
+      const progressAtDeadline = [...progress];
+
+      reportLateCharacter({ loaded: 100, total: 100 } as ProgressEvent);
+      reportLateForest({ loaded: 100, total: 100 } as ProgressEvent);
+      resolveLateCharacter(characterGltf());
+      rejectLateForest(new Error('late forest failure'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(result?.fallback.character).toBe(true);
+      expect(result?.fallback.forest).toBe(true);
+      expect(progress).toEqual(progressAtDeadline);
+      expect(progress.filter((value) => value === 1)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns immutable metadata wrappers without freezing Three objects', async () => {
     const loader = new AssetLoader(loaderFor({
       [ASSET_URLS.character]: characterGltf(),

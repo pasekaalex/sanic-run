@@ -49,6 +49,9 @@ export interface LoadedAssets {
 type ProgressCallback = (progress: number) => void;
 type Category = 'character' | 'spinBall' | 'ring' | 'forest';
 
+/** A missing GLB must fail soft before the 20-second startup ceiling. */
+const ASSET_CATEGORY_DEADLINE_MS = 20_000;
+
 const hasRenderableDescendant = (root: Object3D): boolean => {
   let found = false;
   root.traverse((child) => {
@@ -168,8 +171,11 @@ export class AssetLoader {
     report();
 
     const loadCategory = async (category: Category): Promise<GltfLike | undefined> => {
-      try {
-        return await this.loader.loadAsync(urls[category], (event) => {
+      let complete = false;
+      let deadline: number | undefined;
+      const request = Promise.resolve()
+        .then(() => this.loader.loadAsync(urls[category], (event) => {
+          if (complete) return;
           const fraction = event.total > 0
             ? event.loaded / event.total
             : event.loaded > 0
@@ -177,10 +183,16 @@ export class AssetLoader {
               : 0;
           categoryProgress[category] = Math.max(categoryProgress[category], Math.min(0.99, fraction));
           report();
-        });
-      } catch {
-        return undefined;
+        }))
+        .catch(() => undefined);
+      const timeout = new Promise<undefined>((resolve) => {
+        deadline = setTimeout(resolve, ASSET_CATEGORY_DEADLINE_MS);
+      });
+      try {
+        return await Promise.race([request, timeout]);
       } finally {
+        complete = true;
+        if (deadline !== undefined) clearTimeout(deadline);
         categoryProgress[category] = 1;
         report();
       }

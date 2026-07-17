@@ -1059,6 +1059,33 @@ test('forced WebGL fallback keeps the launch controls and disclosure usable', as
   });
 });
 
+test('normal WebGL loading does not request the fallback promo', async ({ page }) => {
+  let promoRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/media/sanic-game-promo.png') promoRequests += 1;
+  });
+
+  await page.goto('/?seed=7&e2e=1');
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'intro');
+
+  expect(promoRequests).toBe(0);
+});
+
+test('forced fallback requests and exposes the promo exactly once', async ({ page }) => {
+  let promoRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/media/sanic-game-promo.png') promoRequests += 1;
+  });
+
+  await page.goto('/?forceFallback=1');
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'unsupported');
+  await expect(page.getByRole('img', {
+    name: 'Buff blue Sanic charging through a forest of gold rings',
+  })).toBeVisible();
+
+  expect(promoRequests).toBe(1);
+});
+
 test('publishes crawler-safe launch metadata', async ({ page, isMobile }) => {
   test.skip(isMobile, 'static metadata is viewport-independent');
   await page.goto('/?forceFallback=1');
