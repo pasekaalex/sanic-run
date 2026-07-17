@@ -47,9 +47,10 @@ MINIMUM_STANCE_PITCH_PROGRESSION = 22.0
 MAXIMUM_STRIKE_FOREFOOT_Z = 0.006
 MINIMUM_STRIKE_HEEL_Z = 0.015
 MAXIMUM_STRIKE_HEEL_Z = 0.045
-MAXIMUM_LOAD_WHOLE_SHOE_Z = 0.008
+MAXIMUM_LOAD_CONTACT_REGION_Z = 0.008
 MAXIMUM_TOE_OFF_FOREFOOT_Z = 0.008
 MINIMUM_TOE_OFF_HEEL_Z = 0.060
+MINIMUM_ALL_FRAME_SHOE_Z = -0.003
 MINIMUM_FLIGHT_SHOE_Z = 0.025
 MINIMUM_ELBOW_ANGLE = 75.0
 MAXIMUM_ELBOW_ANGLE = 105.0
@@ -60,6 +61,7 @@ IDENTICAL_SHOULDER_EPSILON_DEGREES = 0.05
 MINIMUM_REAR_GLOVE_HEIGHT_SEPARATION = 0.120
 MAXIMUM_HAND_ROOT_RELATIVE_LATERAL_RANGE = 0.050
 MAXIMUM_FIRST_LAST_POSE_ERROR = 1e-4
+MAXIMUM_SOURCE_GLB_STANCE_PITCH_DELTA = 0.25
 
 EXPECTED_BONES = {
     "root",
@@ -272,13 +274,14 @@ def sample(
         hip = point(evaluated_rig, f"upper_leg.{side}", "head")
         knee = point(evaluated_rig, f"lower_leg.{side}", "head")
         ankle = point(evaluated_rig, f"foot.{side}", "head")
+        foot_end = point(evaluated_rig, f"foot.{side}", "tail")
         toe = point(evaluated_rig, f"toe.{side}", "tail")
         upper_arm_direction = (elbow - shoulder).normalized()
         result[side] = {
             "shoe_z": region_minima[side]["shoe"],
             "heel_z": region_minima[side]["heel"],
             "forefoot_z": region_minima[side]["forefoot"],
-            "foot_pitch": sagittal_foot_pitch(toe - ankle),
+            "foot_pitch": sagittal_foot_pitch(foot_end - ankle),
             "toe": toe,
             "hip": hip,
             "knee": knee,
@@ -364,7 +367,16 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
         samples[frame][side]["forefoot_z"] for frame, side in STRIKE
     ]
     strike_heel = [samples[frame][side]["heel_z"] for frame, side in STRIKE]
-    load_shoe = [samples[frame][side]["shoe_z"] for frame, side in LOAD]
+    load_contact_regions = {
+        f"{frame}:{side}": {
+            "heel_z": samples[frame][side]["heel_z"],
+            "forefoot_z": samples[frame][side]["forefoot_z"],
+        }
+        for frame, side in LOAD
+    }
+    load_contact_region_maxima = [
+        max(regions.values()) for regions in load_contact_regions.values()
+    ]
     toe_off_forefoot = [
         samples[frame][side]["forefoot_z"] for frame, side in TOE_OFF
     ]
@@ -383,6 +395,13 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
         for frame in FLIGHT
         for side in ("L", "R")
     ]
+    all_frame_shoe_minima = {
+        str(frame): {
+            side: samples[frame][side]["shoe_z"]
+            for side in ("L", "R")
+        }
+        for frame in ALL_RUN_FRAMES
+    }
     elbow_angles = {
         side: [
             samples[frame][side]["elbow_angle"]
@@ -462,10 +481,35 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
             "minimum": rounded(min(strike_heel)),
             "maximum": rounded(max(strike_heel)),
         },
-        "load_whole_shoe_z": {"maximum": rounded(max(load_shoe))},
+        "load_contact_region_z": {
+            "maximum": rounded(max(load_contact_region_maxima)),
+            "samples": {
+                key: {
+                    region: rounded(value)
+                    for region, value in regions.items()
+                }
+                for key, regions in load_contact_regions.items()
+            },
+        },
         "toe_off_forefoot_z": {"maximum": rounded(max(toe_off_forefoot))},
         "toe_off_heel_z": {"minimum": rounded(min(toe_off_heel))},
         "maximum_toe_separation": rounded(max(toe_separations)),
+        "all_frame_shoe_z": {
+            "minimum": rounded(
+                min(
+                    value
+                    for sides in all_frame_shoe_minima.values()
+                    for value in sides.values()
+                )
+            ),
+            "samples": {
+                frame: {
+                    side: rounded(value)
+                    for side, value in sides.items()
+                }
+                for frame, sides in all_frame_shoe_minima.items()
+            },
+        },
         "minimum_flight_shoe_z": rounded(min(flight_shoe)),
         "elbow_angle": {
             "minimum": rounded(
@@ -627,10 +671,10 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
         f"{MINIMUM_STRIKE_HEEL_Z}..{MAXIMUM_STRIKE_HEEL_Z}",
     )
     check(
-        "load_whole_shoe_z",
-        max(load_shoe) <= MAXIMUM_LOAD_WHOLE_SHOE_Z,
-        metrics["load_whole_shoe_z"],
-        f"<= {MAXIMUM_LOAD_WHOLE_SHOE_Z}",
+        "load_contact_region_z",
+        max(load_contact_region_maxima) <= MAXIMUM_LOAD_CONTACT_REGION_Z,
+        metrics["load_contact_region_z"],
+        f"<= {MAXIMUM_LOAD_CONTACT_REGION_Z}",
     )
     check(
         "toe_off_forefoot_z",
@@ -649,6 +693,17 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
         max(toe_separations) >= MINIMUM_V3_STRIDE_METERS,
         metrics["maximum_toe_separation"],
         f">= {MINIMUM_V3_STRIDE_METERS}",
+    )
+    minimum_all_frame_shoe_z = min(
+        value
+        for sides in all_frame_shoe_minima.values()
+        for value in sides.values()
+    )
+    check(
+        "all_frame_shoe_z",
+        minimum_all_frame_shoe_z >= MINIMUM_ALL_FRAME_SHOE_Z,
+        metrics["all_frame_shoe_z"],
+        f">= {MINIMUM_ALL_FRAME_SHOE_Z}",
     )
     check(
         "minimum_flight_shoe_z",
@@ -720,8 +775,53 @@ def validate(rig: bpy.types.Object) -> tuple[dict[str, object], list[dict[str, o
     }, problems
 
 
+def compare_pitch_semantics(
+    source_path: Path,
+    glb_path: Path,
+) -> dict[str, object]:
+    source_report, _ = validate(load("source", source_path))
+    glb_report, _ = validate(load("glb", glb_path))
+    source_sides = source_report["metrics"]["stance_pitch_progression"]["sides"]
+    glb_sides = glb_report["metrics"]["stance_pitch_progression"]["sides"]
+    deltas = {
+        side: abs(source_sides[side] - glb_sides[side])
+        for side in ("L", "R")
+    }
+    return {
+        "semantic": "stance pitch from foot head to connected foot tail",
+        "source_degrees": source_sides,
+        "glb_degrees": glb_sides,
+        "absolute_delta_degrees": {
+            side: rounded(value) for side, value in deltas.items()
+        },
+        "maximum_absolute_delta_degrees": rounded(max(deltas.values())),
+        "maximum_allowed_delta_degrees": (
+            MAXIMUM_SOURCE_GLB_STANCE_PITCH_DELTA
+        ),
+    }
+
+
 def main() -> None:
     args = arguments_after_separator()
+    if len(args) == 3 and args[0] == "compare-pitch":
+        comparison = compare_pitch_semantics(
+            Path(args[1]).expanduser().resolve(),
+            Path(args[2]).expanduser().resolve(),
+        )
+        print(
+            "SANIC_V3_PITCH_COMPARISON="
+            f"{json.dumps(comparison, separators=(',', ':'), sort_keys=True)}"
+        )
+        maximum_delta = comparison["maximum_absolute_delta_degrees"]
+        if maximum_delta > MAXIMUM_SOURCE_GLB_STANCE_PITCH_DELTA:
+            print("SANIC_V3_PITCH_COMPARISON=FAIL")
+            raise AssertionError(
+                "Source/GLB stance pitch delta "
+                f"{maximum_delta} exceeds "
+                f"{MAXIMUM_SOURCE_GLB_STANCE_PITCH_DELTA}"
+            )
+        print("SANIC_V3_PITCH_COMPARISON=PASS")
+        return
     assert len(args) == 2, "Expected mode and asset path"
     report, problems = validate(
         load(args[0], Path(args[1]).expanduser().resolve())

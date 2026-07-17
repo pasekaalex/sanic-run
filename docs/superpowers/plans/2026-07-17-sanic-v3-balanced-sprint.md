@@ -74,7 +74,7 @@ At every sampled frame, evaluate the skinned mesh through the dependency graph a
 - minimum whole-shoe Z;
 - minimum heel Z;
 - minimum forefoot Z;
-- foot pitch from `foot.<side>.head` to `toe.<side>.tail`;
+- foot pitch from `foot.<side>.head` to its connected `foot.<side>.tail`;
 - toe world position;
 - knee/hip/ankle positions and knee flexion.
 
@@ -96,10 +96,12 @@ assert recovery_knee_height_delta >= 0.120
 assert stance_pitch_progression >= 22.0
 assert strike_forefoot_z <= 0.006
 assert 0.015 <= strike_heel_z <= 0.045
-assert load_whole_shoe_z <= 0.008
+assert load_heel_z <= 0.008
+assert load_forefoot_z <= 0.008
 assert toe_off_forefoot_z <= 0.008
 assert toe_off_heel_z >= 0.060
 assert maximum_toe_separation >= 0.6808613240718842
+assert all_frame_shoe_z >= -0.003
 assert minimum_flight_shoe_z >= 0.025
 assert 75.0 <= elbow_angle <= 105.0
 assert elbow_angle_range >= 18.0
@@ -627,9 +629,11 @@ v3_anchors = {
 
 The values are a deterministic starting implementation, not alternate acceptance criteria. If a numeric validator identifies a miss, adjust only the v3 constant responsible for that named metric and record the before/after measurement. Do not substitute vague visual tuning for a validator result.
 
+For v3 only, rigidly bind disconnected upper-shoe islands whose rest-space Z bounds are within `0.05..0.23 m` to their side's foot. Bind the texture-verified white ankle interior to the same foot, and assert the exact selected counts (`L=329`, `R=343`) so source or UV drift fails closed. This footwear pass must be a no-op for v1 and v2.
+
 - [ ] **Step 4: Replace frame-local flight grounding with a continuous root bridge**
 
-For v3 only, solve the grounded root correction at every stance frame first. Bridge frame 5 to 9 and frame 13 to 17 with smooth interpolation plus a 24 mm parabola:
+For v3 only, select the deterministic low sole from foot/toe-weighted vertices whose rest-world Z is at most `0.03 m`. Assert the exact counts (`L=1702`, `R=1648`) and at least `0.35 m` of forward coverage per side. Solve grounded root corrections from this sole subset at the semantic strike/load/toe-off frames `1, 3, 5, 9, 11, 13, 17`. Keep authored root offsets at intermediate stance frames `2, 4, 10, 12`, with explicit symmetric foot/toe directions that satisfy the all-frame `-0.003 m` penetration floor. Bridge frame 5 to 9 and frame 13 to 17 with smooth interpolation plus a 21 mm parabola:
 
 ```python
 def flight_root_offset(
@@ -641,7 +645,7 @@ def flight_root_offset(
 ) -> Vector:
     t = (frame - first) / (last - first)
     smooth = t * t * (3.0 - 2.0 * t)
-    arc = 0.024 * 4.0 * t * (1.0 - t)
+    arc = 0.021 * 4.0 * t * (1.0 - t)
     return start.lerp(end, smooth) + up * arc
 ```
 
@@ -675,8 +679,12 @@ def make_v3_run(
 ) -> bpy.types.Action:
     poses = {frame: pose_between(anchors, frame) for frame in range(1, 18)}
     stance_sides = {
-        **{frame: "L" for frame in range(1, 6)},
-        **{frame: "R" for frame in range(9, 14)},
+        1: "L",
+        3: "L",
+        5: "L",
+        9: "R",
+        11: "R",
+        13: "R",
         17: "L",
     }
     root_offsets: dict[int, Vector] = {}
@@ -686,10 +694,12 @@ def make_v3_run(
         solve_pose(poses[frame])
         base = poses[frame]["root_offset"]
         assert isinstance(base, Vector)
-        correction = 0.002 - deformed_foot_minimum_z(side)
+        correction = 0.002 - deformed_sole_minimum_z(side)
         root_offsets[frame] = base + up * correction
 
     root_offsets[17] = root_offsets[1].copy()
+    for frame in (2, 4, 10, 12):
+        root_offsets[frame] = poses[frame]["root_offset"].copy()
     for first, last in ((5, 9), (13, 17)):
         for frame in range(first + 1, last):
             root_offsets[frame] = flight_root_offset(
@@ -728,7 +738,7 @@ def make_v3_run(
 run = make_v3_run(v3_anchors)
 ```
 
-Frames 1 and 17 must use the same pose and solved root offset. The validator, not visual guesswork, decides whether the 24 mm arc needs adjustment within the approved 35–50 mm total COM range.
+Frames 1 and 17 must use the same pose and solved root offset. The validator, not visual guesswork, decides whether the 21 mm arc needs adjustment within the approved 35–50 mm total COM range.
 
 Implement this as a separate `make_v3_run()` helper beside the existing `make()`/`key_pose()` path. Extract the current key-insertion statements exactly into `insert_pose_keys()` and call it from both `key_pose()` and v3. Do not change existing grounding behavior or the `make()` call sites for v1, v2, Idle, Jump, or Crash.
 
@@ -751,12 +761,12 @@ After the Blender build, create a local-only three-cycle 24-fps review video:
 ```bash
 ffmpeg -y -framerate 24 \
   -i /home/alex/Downloads/SANIC-Meshy-v3/animation-preview/run-rear-%02d.png \
-  -vf 'loop=loop=2:size=17:start=0' \
-  -frames:v 51 -c:v libx264 -pix_fmt yuv420p \
+  -vf 'loop=loop=2:size=16:start=0' \
+  -frames:v 49 -c:v libx264 -pix_fmt yuv420p \
   /home/alex/Downloads/SANIC-Meshy-v3/animation-preview/run-rear-3cycles.mp4
 ```
 
-Expected: exactly 51 frames. The movie is mandatory for temporal review and remains untracked.
+Expected: exactly 49 frames: the 16 unique intervals repeat three times, followed by the final frame-17 endpoint. The movie is mandatory for temporal review and remains untracked.
 
 - [ ] **Step 6: Build the isolated candidate**
 
@@ -780,9 +790,14 @@ SANIC_RUN_ONLY_PREVIEW=1 \
 /usr/bin/blender --background --factory-startup --python-exit-code 1 \
   --python blender/scripts/validate_meshy_run_v3.py -- \
   glb /home/alex/Downloads/SANIC-Meshy-v3/SANIC-meshy6-v3-run.glb
+/usr/bin/blender --background --factory-startup --python-exit-code 1 \
+  --python blender/scripts/validate_meshy_run_v3.py -- \
+  compare-pitch \
+  /home/alex/Downloads/SANIC-Meshy-v3/SANIC-meshy6-v3-run.blend \
+  /home/alex/Downloads/SANIC-Meshy-v3/SANIC-meshy6-v3-run.glb
 ```
 
-When a metric fails, adjust only the v3 pose/root constants tied to that metric, rebuild once, and rerun both modes. Never alter validator thresholds, v2 code, jump anchors, skinning, or the mesh to force a pass.
+The connected-foot pitch progression must agree between source and GLB within `0.25°`. When a metric fails, adjust only the v3 pose/root constants tied to that metric, rebuild once, and rerun both modes. Never alter validator thresholds, v2 code, jump anchors, skinning, or the mesh to force a pass.
 
 - [ ] **Step 8: Rebuild and semantically compare the untouched v1/v2 paths**
 
@@ -1007,7 +1022,7 @@ git -c user.name=pasekaalex \
 
 - [ ] **Step 2: Obtain an independent visual review**
 
-Give a reviewer the nine front/side checkpoint sets, all 17 rear frames, and the 51-frame three-cycle rear video without telling them which metric was most recently adjusted. Require explicit review of:
+Give a reviewer the nine front/side checkpoint sets, all 17 rear frames, and the 49-frame three-cycle rear video without telling them which metric was most recently adjusted. Require explicit review of:
 
 - continuous vertical COM without pogo takeoff/landing;
 - alternating strike, load, toe-off, and flight;
@@ -1016,9 +1031,9 @@ Give a reviewer the nine front/side checkpoint sets, all 17 rear frames, and the
 - arms driving fore/aft, not side-to-side;
 - visibly changing elbow flexion and glove-height separation;
 - no glove/quill, thigh/crotch, shoe/ground, or limb/torso intersection;
-- exact loop seam from frame 17 back to frame 1.
+- normally moving internal cycle seams from frame 16 back to frame 1, plus the exact final frame-17/frame-1 endpoint match.
 
-Static frames establish pose quality; the uninterrupted three-cycle video is the release gate for temporal popping, foot skating, shoulder holds, easing discontinuities, and the frame-17/frame-1 seam.
+Static frames establish pose quality; the uninterrupted three-cycle video is the release gate for temporal popping, foot skating, shoulder holds, easing discontinuities, the internal frame-16/frame-1 seams, and the final frame-17/frame-1 endpoint match.
 
 Any Critical or Important finding returns to Task 3. A subjective preference that conflicts with a numeric gate requires a design revision, not an ad hoc validator change.
 

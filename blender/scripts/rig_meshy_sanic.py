@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections import defaultdict
 from pathlib import Path
 
 import bpy
@@ -299,6 +300,127 @@ def assign_vertex(
         group.add([vertex_index], weight / total, "REPLACE")
 
 
+def stabilize_v3_footwear(obj: bpy.types.Object) -> None:
+    if RIG_VARIANT != "v3-run" or obj.name != "SANIC_BodyBase":
+        return
+
+    def rigid_assign(indices: list[int], bone_name: str) -> None:
+        for group in obj.vertex_groups:
+            group.remove(indices)
+        obj.vertex_groups[bone_name].add(indices, 1.0, "REPLACE")
+
+    parents = list(range(len(obj.data.vertices)))
+
+    def component_root(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def join_components(first: int, second: int) -> None:
+        first_root = component_root(first)
+        second_root = component_root(second)
+        if first_root != second_root:
+            parents[second_root] = first_root
+
+    for edge in obj.data.edges:
+        join_components(*edge.vertices)
+    components: dict[int, list[int]] = defaultdict(list)
+    for vertex in obj.data.vertices:
+        components[component_root(vertex.index)].append(vertex.index)
+
+    # Meshy's shoe surface is split into hundreds of disconnected islands.
+    # Keep the upper-shoe islands rigid with the foot so the cuff cannot split
+    # into a dangling flap while preserving the low sole vertices used by the
+    # run grounding solver.
+    for indices in components.values():
+        points = [
+            obj.matrix_world @ obj.data.vertices[index].co
+            for index in indices
+        ]
+        if not (
+            min(point.z for point in points) >= 0.05
+            and max(point.z for point in points) <= 0.23
+        ):
+            continue
+        centroid_x = sum(point.x for point in points) / len(points)
+        side = "L" if centroid_x < 0.0 else "R"
+        rigid_assign(indices, f"foot.{side}")
+
+    material = obj.material_slots[0].material
+    assert material is not None and material.use_nodes
+    base_color_link = next(
+        link
+        for link in material.node_tree.links
+        if link.to_node.type == "BSDF_PRINCIPLED"
+        and link.to_socket.name == "Base Color"
+    )
+    image_node = base_color_link.from_node
+    assert image_node.type == "TEX_IMAGE" and image_node.image is not None
+    image = image_node.image
+    pixels = image.pixels[:]
+    uv_layer = obj.data.uv_layers.active
+    assert uv_layer is not None
+
+    def sample_texture(uv: Vector) -> tuple[float, float, float]:
+        pixel_x = min(image.size[0] - 1, max(0, int(uv.x * image.size[0])))
+        pixel_y = min(image.size[1] - 1, max(0, int(uv.y * image.size[1])))
+        offset = (pixel_y * image.size[0] + pixel_x) * 4
+        return tuple(pixels[offset + channel] for channel in range(3))
+
+    white_ankle_vertices: set[int] = set()
+    for polygon in obj.data.polygons:
+        point = obj.matrix_world @ polygon.center
+        if not (
+            abs(point.x) > 0.04
+            and point.y < -0.10
+            and 0.17 <= point.z <= 0.24
+        ):
+            continue
+        uvs = [
+            uv_layer.data[loop_index].uv
+            for loop_index in polygon.loop_indices
+        ]
+        centroid_uv = Vector(
+            (
+                sum(uv.x for uv in uvs) / len(uvs),
+                sum(uv.y for uv in uvs) / len(uvs),
+            )
+        )
+        if min(sample_texture(centroid_uv)) >= 0.8:
+            white_ankle_vertices.update(polygon.vertices)
+
+    incident_colors = {
+        index: [] for index in white_ankle_vertices
+    }
+    for loop in obj.data.loops:
+        if loop.vertex_index in incident_colors:
+            incident_colors[loop.vertex_index].append(
+                sample_texture(uv_layer.data[loop.index].uv)
+            )
+    white_interior_vertices = [
+        index
+        for index, colors in incident_colors.items()
+        if colors and all(min(color) >= 0.8 for color in colors)
+    ]
+    expected_white_counts = {"L": 329, "R": 343}
+    for side in ("L", "R"):
+        indices = [
+            index
+            for index in white_interior_vertices
+            if (
+                obj.matrix_world @ obj.data.vertices[index].co
+            ).x * (-1.0 if side == "L" else 1.0) > 0.0
+        ]
+        assert len(indices) == expected_white_counts[side], (
+            side,
+            len(indices),
+            expected_white_counts[side],
+        )
+        if indices:
+            rigid_assign(indices, f"foot.{side}")
+
+
 def skin_character(
     rig: bpy.types.Object,
     collection: bpy.types.Collection,
@@ -322,6 +444,7 @@ def skin_character(
                 vertex.index,
                 fixed if fixed is not None else body_influences(point),
             )
+        stabilize_v3_footwear(obj)
         modifier = obj.modifiers.new("SANIC_ArmatureDeform", "ARMATURE")
         modifier.object = rig
         modifier.use_vertex_groups = True
@@ -362,15 +485,21 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         "L": [],
         "R": [],
     }
+    sole_region_vertices: dict[str, list[tuple[bpy.types.Object, list[int]]]] = {
+        "L": [],
+        "R": [],
+    }
+    expected_sole_vertex_counts = {"L": 1702, "R": 1648}
     for side in ("L", "R"):
         group_names = {f"foot.{side}", f"toe.{side}"}
+        rest_forward_positions: list[float] = []
         for obj in character_meshes:
             group_indices = {
                 group.index for group in obj.vertex_groups if group.name in group_names
             }
             if not group_indices:
                 continue
-            vertex_indices = [
+            foot_indices = [
                 vertex.index
                 for vertex in obj.data.vertices
                 if any(
@@ -378,9 +507,36 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
                     for membership in vertex.groups
                 )
             ]
-            if vertex_indices:
-                foot_region_vertices[side].append((obj, vertex_indices))
+            if foot_indices:
+                foot_region_vertices[side].append((obj, foot_indices))
+            sole_indices = [
+                index
+                for index in foot_indices
+                if (
+                    obj.matrix_world @ obj.data.vertices[index].co
+                ).z <= 0.03
+            ]
+            if sole_indices:
+                sole_region_vertices[side].append((obj, sole_indices))
+                rest_forward_positions.extend(
+                    (obj.matrix_world @ obj.data.vertices[index].co).dot(forward)
+                    for index in sole_indices
+                )
         assert foot_region_vertices[side], f"Missing weighted shoe region for {side}"
+        if RIG_VARIANT != "v3-run":
+            continue
+        selected_count = sum(
+            len(indices) for _, indices in sole_region_vertices[side]
+        )
+        assert selected_count == expected_sole_vertex_counts[side], (
+            side,
+            selected_count,
+            expected_sole_vertex_counts[side],
+        )
+        assert (
+            rest_forward_positions
+            and max(rest_forward_positions) - min(rest_forward_positions) >= 0.35
+        ), (side, rest_forward_positions)
 
     def side_direction(side: str, values: tuple[float, float, float]) -> Vector:
         sign = -1.0 if side == "L" else 1.0
@@ -500,13 +656,15 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             for corner in evaluated.bound_box
         )
 
-    def deformed_foot_minimum_z(side: str) -> float:
-        """Return the actual evaluated shoe sole height for one side."""
+    def deformed_region_minimum_z(
+        regions: dict[str, list[tuple[bpy.types.Object, list[int]]]],
+        side: str,
+    ) -> float:
         bpy.context.view_layer.update()
         depsgraph = bpy.context.evaluated_depsgraph_get()
         minimum = float("inf")
         selected = 0
-        for obj, vertex_indices in foot_region_vertices[side]:
+        for obj, vertex_indices in regions[side]:
             evaluated = obj.evaluated_get(depsgraph)
             mesh = evaluated.to_mesh()
             try:
@@ -522,6 +680,14 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
                 evaluated.to_mesh_clear()
         assert selected > 0 and math.isfinite(minimum), (side, selected, minimum)
         return minimum
+
+    def deformed_foot_minimum_z(side: str) -> float:
+        """Return the evaluated shoe height for legacy v1/v2 grounding."""
+        return deformed_region_minimum_z(foot_region_vertices, side)
+
+    def deformed_sole_minimum_z(side: str) -> float:
+        """Return the evaluated low-rest-z v3 sole height."""
+        return deformed_region_minimum_z(sole_region_vertices, side)
 
     def insert_pose_keys(
         frame: int,
@@ -619,9 +785,27 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             frame: pose_between(anchors, frame)
             for frame in range(1, 18)
         }
+        intermediate_stance_feet = {
+            2: ("L", (0.015, 0.976, -0.218), (0.010, 0.995, -0.100)),
+            4: ("L", (0.015, 0.940, -0.342), (0.010, 0.990, -0.140)),
+            10: ("R", (0.015, 0.976, -0.218), (0.010, 0.995, -0.100)),
+            12: ("R", (0.015, 0.940, -0.342), (0.010, 0.990, -0.140)),
+        }
+        for frame, (side, foot_values, toe_values) in (
+            intermediate_stance_feet.items()
+        ):
+            legs = poses[frame]["legs"]
+            assert isinstance(legs, dict)
+            leg = legs[side]
+            leg["foot"] = side_direction(side, foot_values)
+            leg["toe"] = side_direction(side, toe_values)
         stance_sides = {
-            **{frame: "L" for frame in range(1, 6)},
-            **{frame: "R" for frame in range(9, 14)},
+            1: "L",
+            3: "L",
+            5: "L",
+            9: "R",
+            11: "R",
+            13: "R",
             17: "L",
         }
         root_offsets: dict[int, Vector] = {}
@@ -631,10 +815,14 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             solve_pose(poses[frame])
             base = poses[frame]["root_offset"]
             assert isinstance(base, Vector)
-            correction = 0.002 - deformed_foot_minimum_z(side)
+            correction = 0.002 - deformed_sole_minimum_z(side)
             root_offsets[frame] = base + up * correction
 
         root_offsets[17] = root_offsets[1].copy()
+        for frame in (2, 4, 10, 12):
+            authored = poses[frame]["root_offset"]
+            assert isinstance(authored, Vector)
+            root_offsets[frame] = authored.copy()
         for first, last in ((5, 9), (13, 17)):
             for frame in range(first + 1, last):
                 root_offsets[frame] = flight_root_offset(
@@ -842,15 +1030,15 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         )
         v3_leg_load = (
             (0.025, 0.180, -0.984),
-            (0.020, -0.392, -0.920),
-            (0.015, 1.000, -0.020),
-            (0.010, 1.000, 0.000),
+            (0.020, -0.505, -0.863),
+            (0.015, 0.976, -0.218),
+            (0.010, 0.995, -0.100),
         )
         v3_leg_recovery = (
             (0.025, -0.100, -0.995),
             (0.020, -0.980, -0.200),
-            (0.015, 0.980, 0.200),
-            (0.010, 0.995, 0.100),
+            (0.015, 0.995, -0.100),
+            (0.010, 0.995, -0.100),
         )
         v3_leg_toe_off = (
             (0.025, -0.250, -0.968),
@@ -873,8 +1061,8 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         v3_leg_flight_recovery = (
             (0.025, -0.700, -0.714),
             (0.020, -0.940, 0.342),
-            (0.015, 0.900, 0.435),
-            (0.010, 0.980, 0.200),
+            (0.015, 0.930, -0.367),
+            (0.010, 0.930, -0.367),
         )
 
         v3_contact_a = pose(
@@ -886,7 +1074,7 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             legs={"L": v3_leg_strike, "R": v3_leg_trail},
         )
         v3_load_a = pose(
-            root_up=-0.014,
+            root_up=-0.040,
             lean=23.0,
             pelvis_yaw=-3.0,
             chest_yaw=4.0,
@@ -918,7 +1106,7 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             legs={"L": v3_leg_trail, "R": v3_leg_strike},
         )
         v3_load_b = pose(
-            root_up=-0.014,
+            root_up=-0.040,
             lean=23.0,
             pelvis_yaw=3.0,
             chest_yaw=-4.0,
