@@ -1296,6 +1296,7 @@
   }
 
   #app-ui[data-ui-theme='pixel-16'] .attract-stage__ridge--far {
+    display: none;
     bottom: 91px;
     height: 72px;
   }
@@ -1351,6 +1352,21 @@
   #app-ui[data-ui-theme='pixel-16'] .hud {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  #app-ui[data-ui-theme='pixel-16'] .title-word {
+    text-shadow:
+      2px 2px 0 var(--arcade-cobalt),
+      4px 4px 0 var(--arcade-ink);
+  }
+
+  #app-ui[data-ui-theme='pixel-16'] .intro-panel__links {
+    grid-template-columns: 1fr;
+  }
+
+  #app-ui[data-ui-theme='pixel-16'] .service-deck > * {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 @media (max-height: 620px) and (orientation: landscape) {
@@ -1359,6 +1375,17 @@
   }
 
   #app-ui[data-ui-theme='pixel-16'] .intro-panel__tagline {
+    display: none;
+  }
+
+  #app-ui[data-ui-theme='pixel-16'] :is(
+    .title-subtitle,
+    .arcade-score-strip,
+    .attract-stage__ridge--far,
+    .pixel-ring--two,
+    .pixel-ring--three,
+    .pixel-ring--four
+  ) {
     display: none;
   }
 }

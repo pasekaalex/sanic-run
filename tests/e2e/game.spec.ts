@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const CONTRACT = 'CMNDT7PK5gHY8ZknhzEC2Q7UMDs2b7LT6c1eX7Kepump';
 const PUMP_URL = `https://pump.fun/coin/${CONTRACT}`;
@@ -26,6 +26,67 @@ const contrastRatio = (foreground: string, background: string): number => {
   const backgroundLuminance = luminance(background);
   return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
     (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+};
+
+const expectReachableInViewport = async (
+  locator: Locator,
+  viewport: Readonly<{ width: number; height: number }>,
+): Promise<void> => {
+  await locator.evaluate((element) => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+};
+
+const expectInitiallyHorizontallyBounded = async (locator: Locator, viewportWidth: number): Promise<void> => {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewportWidth);
+};
+
+const expectPortraitIntroReachable = async (
+  page: Page,
+  viewport: Readonly<{ width: number; height: number }>,
+): Promise<void> => {
+  await page.setViewportSize(viewport);
+  await page.goto('/?seed=7&e2e=1');
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'intro');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+
+  const intro = page.locator('[data-view="intro"]');
+  for (const locator of [
+    intro.locator('[data-stage-marquee]'),
+    intro.locator('[data-title-lockup]'),
+    intro.locator('[data-meme-ticker]'),
+    intro.getByRole('button', { name: 'PRESS START' }),
+  ]) {
+    await expectInitiallyHorizontallyBounded(locator, viewport.width);
+  }
+
+  for (const locator of [
+    intro.locator('[data-service-deck] .contract code'),
+    intro.getByRole('button', { name: 'Copy contract' }),
+    intro.getByRole('link', { name: 'View on Pump.fun' }),
+    intro.getByRole('link', { name: 'Follow $SANIC on X' }),
+    intro.getByText('MEME COIN DISCLOSURE', { exact: true }),
+  ]) {
+    await expectReachableInViewport(locator, viewport);
+  }
+
+  for (const ornament of [
+    page.locator('.arcade-score-strip'),
+    page.locator('.attract-stage__ridge--far'),
+    page.locator('.pixel-ring--three'),
+    page.locator('.pixel-ring--four'),
+  ]) {
+    await expect(ornament).toBeHidden();
+  }
 };
 
 const beginRun = async (page: Page): Promise<void> => {
@@ -341,7 +402,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
       ringPlayState: style('.pixel-ring').animationPlayState,
       titlePlayState: style('.title-lockup').animationPlayState,
       cursorPlayState: style('.arcade-menu__cursor').animationPlayState,
-      marqueeCheckerPlayState: style('.stage-marquee__checker').animationPlayState,
+      marqueeCheckerPlayState: style('[data-view="intro"] .stage-marquee__checker').animationPlayState,
     };
   });
   expect(playingStage).toEqual({
@@ -447,6 +508,56 @@ test('keeps mobile pixel labels readable before reducing ornament', async ({ pag
   for (const size of labelSizes) expect(size).toBeGreaterThanOrEqual(8.32);
 });
 
+test('prunes arcade ornament at 600px for the 320x568 mobile layout', async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 800 });
+  await page.goto('/?seed=7&e2e=1');
+  for (const ornament of [
+    page.locator('.arcade-score-strip'),
+    page.locator('.attract-stage__ridge--far'),
+    page.locator('.pixel-ring--three'),
+    page.locator('.pixel-ring--four'),
+  ]) {
+    await expect(ornament).toBeHidden();
+  }
+});
+
+test('keeps 390x844 title actions reachable in the 320x568 regression group', async ({ page }) => {
+  await expectPortraitIntroReachable(page, { width: 390, height: 844 });
+});
+
+test('keeps cartridge title actions reachable at 320x568', async ({ page }) => {
+  await expectPortraitIntroReachable(page, { width: 320, height: 568 });
+
+  const compactTheme = await page.evaluate(() => ({
+    titleShadow: getComputedStyle(document.querySelector('.title-word')!).textShadow,
+    stageDisplay: getComputedStyle(document.querySelector('.hud__stage')!).display,
+    distanceDisplay: getComputedStyle(document.querySelector('.hud__metric--distance')!).display,
+    serviceWidths: [...document.querySelectorAll<HTMLElement>('[data-service-deck] > *')].map(
+      (element) => ({
+        child: element.getBoundingClientRect().width,
+        parentContent: element.parentElement!.clientWidth -
+          Number.parseFloat(getComputedStyle(element.parentElement!).paddingLeft) -
+          Number.parseFloat(getComputedStyle(element.parentElement!).paddingRight),
+      }),
+    ),
+    launchWidths: [...document.querySelectorAll<HTMLElement>('[data-service-deck] .intro-panel__links > *')].map(
+      (element) => ({
+        child: element.getBoundingClientRect().width,
+        parent: element.parentElement!.getBoundingClientRect().width,
+      }),
+    ),
+  }));
+  expect(compactTheme.titleShadow).not.toContain('6px 6px');
+  expect(compactTheme.stageDisplay).toBe('none');
+  expect(compactTheme.distanceDisplay).toBe('none');
+  for (const widths of compactTheme.serviceWidths) {
+    expect(widths.child).toBeGreaterThanOrEqual(widths.parentContent - 1);
+  }
+  for (const widths of compactTheme.launchWidths) {
+    expect(widths.child).toBeGreaterThanOrEqual(widths.parent - 1);
+  }
+});
+
 test('disables themed transitions when reduced motion is requested', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/?seed=7&e2e=1');
@@ -487,6 +598,11 @@ test('disables themed transitions when reduced motion is requested', async ({ pa
     promptAnimation: 'none',
     tickerAnimation: 'none',
   });
+  expect(await page.locator('#app-ui').evaluate((ui) =>
+    ui.getAnimations({ subtree: true }).filter((animation) => animation.playState === 'running').length
+  )).toBe(0);
+  await expect(page.locator('.arcade-menu__cursor')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'PRESS START' })).toBeVisible();
 });
 
 test('renders a cartridge HUD as one opaque stage strip', async ({ page }) => {
@@ -861,32 +977,92 @@ test('touch swipe changes lane and the pause dialog stays inside the viewport', 
   expect(box!.y + box!.height).toBeLessThanOrEqual(844);
 });
 
-test('short landscape keeps launch and pause legal controls scrollable', async ({ page, isMobile }) => {
+test('short landscape keeps launch and legal controls scrollable', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'mobile landscape regression');
   await page.setViewportSize({ width: 844, height: 390 });
   await page.goto('/?seed=7&e2e=1');
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'intro');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(844);
+
+  for (const ornament of [
+    page.locator('.title-subtitle'),
+    page.locator('.arcade-score-strip'),
+    page.locator('.attract-stage__ridge--far'),
+    page.locator('.pixel-ring--two'),
+    page.locator('.pixel-ring--three'),
+    page.locator('.pixel-ring--four'),
+  ]) {
+    await expect(ornament).toBeHidden();
+  }
+
   const intro = page.locator('[data-view="intro"]');
-  await expect(intro.getByRole('button', { name: 'Copy contract' })).toBeVisible();
-  await expect(intro.getByRole('link', { name: 'View on Pump.fun' })).toBeVisible();
-  await expect(intro.getByRole('link', { name: 'Follow $SANIC on X' })).toBeVisible();
   const introDisclosure = intro.getByText('MEME COIN DISCLOSURE', { exact: true });
-  await introDisclosure.scrollIntoViewIfNeeded();
+  for (const control of [
+    intro.locator('[data-stage-marquee]'),
+    intro.getByRole('button', { name: 'PRESS START' }),
+    intro.locator('[data-service-deck] .contract code'),
+    intro.getByRole('button', { name: 'Copy contract' }),
+    intro.getByRole('link', { name: 'View on Pump.fun' }),
+    intro.getByRole('link', { name: 'Follow $SANIC on X' }),
+    introDisclosure,
+  ]) {
+    await expectReachableInViewport(control, { width: 844, height: 390 });
+  }
+
   await introDisclosure.click();
   const introLegal = intro.getByText(/No utility, no promises, no financial advice/);
-  await introLegal.scrollIntoViewIfNeeded();
-  await expect(introLegal).toBeVisible();
-  await intro.getByRole('button', { name: 'PRESS START' }).click();
+  await expectReachableInViewport(introLegal, { width: 844, height: 390 });
+});
+
+test('short landscape keeps play and pause controls scrollable', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'mobile landscape regression');
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.goto('/?seed=7&e2e=1');
+  await page.getByRole('button', { name: 'PRESS START' }).click();
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+
+  for (const control of [
+    page.getByRole('button', { name: 'Mute sound' }),
+    page.getByRole('button', { name: 'Pause' }),
+  ]) {
+    await expect(control).toBeVisible();
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(844);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(390);
+  }
+
   await page.getByRole('button', { name: 'Pause' }).click();
   const dialog = page.getByRole('dialog', { name: 'PAUSED' });
   for (const control of [
+    dialog.getByRole('button', { name: /^resume$/i }),
+    dialog.locator('.contract code'),
     dialog.getByRole('button', { name: 'Copy contract' }),
     dialog.getByRole('link', { name: 'View on Pump.fun' }),
     dialog.getByRole('link', { name: 'Follow $SANIC on X' }),
     dialog.getByText(/No utility, no promises, no financial advice/),
   ]) {
-    await control.scrollIntoViewIfNeeded();
-    await expect(control).toBeVisible();
+    await expectReachableInViewport(control, { width: 844, height: 390 });
   }
+});
+
+test('short landscape keeps restart and share controls scrollable', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'mobile landscape regression');
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.goto('/?seed=7&e2e=1');
+  await page.getByRole('button', { name: 'PRESS START' }).click();
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  const results = page.getByRole('dialog', { name: 'GAME OVER' });
+  for (const control of [
+    results.locator('[data-action="restart"]'),
+    results.locator('[data-action="share"]'),
+  ]) {
+    await expectReachableInViewport(control, { width: 844, height: 390 });
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(844);
 });
 
 test('WebGL context loss gates resume until the context is restored', async ({ page, isMobile }) => {
