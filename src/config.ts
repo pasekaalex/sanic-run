@@ -17,6 +17,7 @@ export const GAME = Object.freeze({
   ringsPerMultiplier: 10,
   maxMultiplier: 5,
   spawnAhead: 190,
+  zoneTransitionSeconds: 2.4,
 });
 
 export const ASSET_URLS = Object.freeze({

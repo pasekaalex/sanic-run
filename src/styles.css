@@ -467,6 +467,24 @@ h2,
   text-shadow: 0 2px 8px #000;
 }
 
+.zone-transition {
+  position: absolute;
+  z-index: 8;
+  top: max(146px, calc(env(safe-area-inset-top) + 136px));
+  left: 50%;
+  display: grid;
+  gap: 5px;
+  width: min(430px, calc(100vw - 32px));
+  padding: 16px 20px;
+  pointer-events: none;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.zone-transition strong {
+  display: block;
+}
+
 .game-dialog {
   width: min(620px, calc(100vw - 28px));
   max-width: none;
@@ -859,6 +877,11 @@ h2,
 
   .swipe-hint {
     display: block;
+  }
+
+  .zone-transition {
+    top: max(160px, calc(env(safe-area-inset-top) + 150px));
+    width: min(340px, calc(100vw - 20px));
   }
 
   .game-dialog {

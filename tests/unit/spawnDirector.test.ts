@@ -3,6 +3,7 @@ import { GAME } from '../../src/config';
 import { GameSimulation, type SpawnSource } from '../../src/game/simulation';
 import { SpawnDirector } from '../../src/game/spawnDirector';
 import type { Lane, SpawnRow } from '../../src/game/types';
+import { speedAtDistance, zoneAtDistance, type ZoneId } from '../../src/game/zones';
 
 const SPEED_CAP_DISTANCE = (GAME.maxSpeed - GAME.startSpeed) * 140;
 const EXPECTED_WEAVE_PERMUTATIONS = Object.freeze([
@@ -216,6 +217,33 @@ const collectWithEarliestLegalCommands = (row: SpawnRow): number => {
   throw new Error(`Fixed-step collection schedule did not reach row ${row.id}`);
 };
 
+const hazardRatiosByZone = (): Readonly<Record<ZoneId, number>> => {
+  const totals: Record<ZoneId, number> = {
+    'ringwood-rush': 0,
+    'liquidity-loop': 0,
+    'ansem-after-dark': 0,
+  };
+  const hazards: Record<ZoneId, number> = {
+    'ringwood-rush': 0,
+    'liquidity-loop': 0,
+    'ansem-after-dark': 0,
+  };
+
+  for (let seed = 1; seed <= 32; seed += 1) {
+    for (const row of rowsThrough(seed, 4_000).filter((candidate) => candidate.at >= GAME.spawnAhead)) {
+      const zone = zoneAtDistance(row.at).id;
+      totals[zone] += 1;
+      if (row.obstacles.length > 0) hazards[zone] += 1;
+    }
+  }
+
+  return Object.freeze({
+    'ringwood-rush': hazards['ringwood-rush'] / totals['ringwood-rush'],
+    'liquidity-loop': hazards['liquidity-loop'] / totals['liquidity-loop'],
+    'ansem-after-dark': hazards['ansem-after-dark'] / totals['ansem-after-dark'],
+  });
+};
+
 describe('SpawnDirector', () => {
   it('is deterministic for a seed', () => {
     const resettable = new SpawnDirector(0x5a11c);
@@ -224,6 +252,26 @@ describe('SpawnDirector', () => {
     expect(a).toEqual(b);
     resettable.reset(0x5a11c);
     expect(resettable.takeUntil(220)).toEqual(a);
+  });
+
+  it('uses the shared speed curve for every generated row gap', () => {
+    const rows = rowsThrough(0x5a11c, 3_000);
+    for (let index = 1; index < rows.length; index += 1) {
+      const previous = rows[index - 1]!;
+      expect(rows[index]!.at - previous.at).toBeCloseTo(
+        12 + speedAtDistance(previous.at) * 0.32,
+        10,
+      );
+    }
+  });
+
+  it('deterministically shifts safe template weight toward hazards in later zones', () => {
+    const first = hazardRatiosByZone();
+    const second = hazardRatiosByZone();
+
+    expect(second).toEqual(first);
+    expect(first['ringwood-rush']).toBeLessThan(first['liquidity-loop']);
+    expect(first['liquidity-loop']).toBeLessThan(first['ansem-after-dark']);
   });
 
   it('returns a row through its behind-player safety margin and prunes it immediately after', () => {

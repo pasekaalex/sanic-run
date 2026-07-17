@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GAME } from '../../src/config';
 import { GameSimulation, type SpawnSource } from '../../src/game/simulation';
 import type { CoinSpawn, ObstacleSpawn, SpawnRow } from '../../src/game/types';
+import { speedAtDistance } from '../../src/game/zones';
 
 const ONE_HOUR_SECONDS = 60 * 60;
 const PRODUCTION_LOADED_ROW_LIMIT = 14;
@@ -327,6 +328,24 @@ describe('GameSimulation', () => {
     game.start();
     advance(game, 120);
     expect(game.snapshot().speed).toBe(GAME.maxSpeed);
+  });
+
+  it('projects the shared zone speed curve after every simulation step', () => {
+    for (const distance of [0, 839.5, 840, 1_959.5, 1_960, 2_519.5, 2_520]) {
+      const game = new GameSimulation(60, scriptedSource([]));
+      const probe = game as unknown as {
+        distanceValue: number;
+        speedValue: number;
+      };
+      game.start();
+      probe.distanceValue = distance;
+      probe.speedValue = speedAtDistance(distance);
+
+      game.step(GAME.fixedStep);
+
+      const current = game.snapshot();
+      expect(current.speed).toBeCloseTo(speedAtDistance(current.distance), 12);
+    }
   });
 
   it('clears a jumpable log above the clearance height', () => {

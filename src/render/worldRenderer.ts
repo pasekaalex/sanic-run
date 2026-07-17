@@ -34,6 +34,7 @@ import {
 } from 'three';
 import { GAME } from '../config';
 import type { ObstacleKind, SimulationSnapshot } from '../game/types';
+import { zoneAtDistance, type ZoneId } from '../game/zones';
 import {
   CHARACTER_ACTION_NAMES,
   FOREST_PART_NAMES,
@@ -81,6 +82,26 @@ interface Particle {
   readonly size: number;
 }
 
+interface GroundMaterials {
+  readonly verge: MeshStandardMaterial;
+  readonly road: MeshStandardMaterial;
+}
+
+interface WorldPalette {
+  readonly clear: number;
+  readonly fog: number;
+  readonly hemisphereSky: number;
+  readonly hemisphereGround: number;
+  readonly sun: number;
+  readonly verge: number;
+  readonly road: number;
+  readonly lane: number;
+  readonly laneEmissive: number;
+  readonly exposure: number;
+}
+
+export type SceneryLayer = 'tree' | 'foliage' | 'detail';
+
 const ZERO = new Vector3();
 const IDENTITY_QUATERNION = new Quaternion();
 const UNIT_SCALE = new Vector3(1, 1, 1);
@@ -97,6 +118,102 @@ const REQUIRED_POOL_CAPACITIES = Object.freeze({
 const hash01 = (value: number): number => {
   const mixed = Math.sin(value * 12.9898 + 78.233) * 43_758.5453;
   return mixed - Math.floor(mixed);
+};
+
+const SCENERY_PARTS: Readonly<Record<SceneryLayer, readonly [ForestPartName, ForestPartName]>> = Object.freeze({
+  tree: Object.freeze(['KIT_Tree_A', 'KIT_Tree_B'] as const),
+  foliage: Object.freeze(['KIT_Grass', 'KIT_Fern'] as const),
+  detail: Object.freeze(['KIT_Rock', 'KIT_Mushroom'] as const),
+});
+
+const SCENERY_LAYER_SALTS: Readonly<Record<SceneryLayer, number>> = Object.freeze({
+  tree: 3.17,
+  foliage: 17.41,
+  detail: 37.73,
+});
+
+const SCENERY_ZONE_SALTS: Readonly<Record<ZoneId, number>> = Object.freeze({
+  'ringwood-rush': 0,
+  'liquidity-loop': 43.19,
+  'ansem-after-dark': 91.07,
+});
+
+const SIGN_ORDERS: Readonly<Record<ZoneId, readonly ForestPartName[]>> = Object.freeze({
+  'ringwood-rush': Object.freeze([
+    'KIT_Sign_Trenches',
+    'KIT_Sign_Stimmy',
+    'KIT_Sign_Memes',
+    'KIT_Sign_Coping',
+  ] as const),
+  'liquidity-loop': Object.freeze([
+    'KIT_Sign_Stimmy',
+    'KIT_Sign_Coping',
+    'KIT_Sign_Trenches',
+    'KIT_Sign_Memes',
+  ] as const),
+  'ansem-after-dark': Object.freeze([
+    'KIT_Sign_Memes',
+    'KIT_Sign_Coping',
+    'KIT_Sign_Stimmy',
+    'KIT_Sign_Trenches',
+  ] as const),
+});
+
+const WORLD_PALETTES: Readonly<Record<ZoneId, Readonly<WorldPalette>>> = Object.freeze({
+  'ringwood-rush': Object.freeze({
+    clear: 0x64ded5,
+    fog: 0x66d9cf,
+    hemisphereSky: 0xbefcff,
+    hemisphereGround: 0x27551f,
+    sun: 0xffd48a,
+    verge: 0x159c42,
+    road: 0xa76735,
+    lane: 0xffe6a6,
+    laneEmissive: 0x4b2800,
+    exposure: 1.16,
+  }),
+  'liquidity-loop': Object.freeze({
+    clear: 0x8c4cae,
+    fog: 0x8148a7,
+    hemisphereSky: 0xff9bd8,
+    hemisphereGround: 0x27205f,
+    sun: 0xff9b70,
+    verge: 0x3d3075,
+    road: 0x6b355f,
+    lane: 0x6df6ff,
+    laneEmissive: 0x84256f,
+    exposure: 1.08,
+  }),
+  'ansem-after-dark': Object.freeze({
+    clear: 0x07173f,
+    fog: 0x0b2554,
+    hemisphereSky: 0x62efff,
+    hemisphereGround: 0x160b38,
+    sun: 0xff53d3,
+    verge: 0x102d4d,
+    road: 0x24143f,
+    lane: 0x64f8ff,
+    laneEmissive: 0xc324ff,
+    exposure: 1,
+  }),
+});
+
+export const sceneryPartForSegment = (
+  layer: SceneryLayer,
+  segment: number,
+  zone: ZoneId,
+): ForestPartName => {
+  const parts = SCENERY_PARTS[layer];
+  const selection = hash01(
+    Math.trunc(segment) * 19.37 + SCENERY_LAYER_SALTS[layer] + SCENERY_ZONE_SALTS[zone],
+  );
+  return parts[Math.min(parts.length - 1, Math.floor(selection * parts.length))]!;
+};
+
+export const signPartForSlot = (slot: number, zone: ZoneId): ForestPartName => {
+  const order = SIGN_ORDERS[zone];
+  const normalizedSlot = ((Math.trunc(slot) % order.length) + order.length) % order.length;
+  return order[normalizedSlot]!;
 };
 
 const materialAt = (material: Material | Material[], index: number): Material => (
@@ -271,7 +388,10 @@ export class WorldRenderer {
   private readonly sceneryTemplates = new Map<ForestPartName, InstancedTemplate>();
   private readonly obstaclePools: Record<ObstacleKind, ObstaclePool>;
   private readonly laneMarkers: InstancedMesh;
+  private readonly laneMarkerMaterial: MeshStandardMaterial;
+  private readonly hemisphereLight: HemisphereLight;
   private readonly directionalLight: DirectionalLight;
+  private readonly groundMaterials: GroundMaterials;
   private readonly sparkles: ParticlePool;
   private readonly dust: ParticlePool;
   private readonly placementDummy = new Object3D();
@@ -287,6 +407,7 @@ export class WorldRenderer {
   private lastFrameTime = performance.now();
   private lastDustAt = 0;
   private spinRotation = 0;
+  private currentZoneId: ZoneId | null = null;
 
   private readonly handleResize = (): void => this.resize();
   private readonly handleContextLost = (event: Event): void => {
@@ -320,8 +441,6 @@ export class WorldRenderer {
     });
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.16;
-    this.renderer.setClearColor(0x64ded5, 0);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFShadowMap;
 
@@ -329,9 +448,14 @@ export class WorldRenderer {
     this.scene.add(this.world);
     this.world.add(this.instances, this.particles);
 
-    this.directionalLight = this.createLighting();
-    this.createGround();
-    this.laneMarkers = this.createLaneMarkers();
+    const lighting = this.createLighting();
+    this.hemisphereLight = lighting.hemisphere;
+    this.directionalLight = lighting.directional;
+    this.groundMaterials = this.createGround();
+    const laneMarkers = this.createLaneMarkers();
+    this.laneMarkers = laneMarkers.mesh;
+    this.laneMarkerMaterial = laneMarkers.material;
+    this.updateZonePresentation(0);
 
     this.character = assets.character;
     this.character.name ||= 'SANIC_Character';
@@ -441,6 +565,7 @@ export class WorldRenderer {
       blend,
     );
 
+    this.updateZonePresentation(current.distance);
     this.character.position.set(playerX, playerY, 0);
     this.spinBall.position.set(playerX, playerY + 1.45, 0);
     this.updateAnimation(current, jumpProgress, dt);
@@ -553,7 +678,10 @@ export class WorldRenderer {
     this.renderer.dispose();
   }
 
-  private createLighting(): DirectionalLight {
+  private createLighting(): {
+    readonly hemisphere: HemisphereLight;
+    readonly directional: DirectionalLight;
+  } {
     const hemisphere = new HemisphereLight(0xbefcff, 0x27551f, 2.45);
     this.scene.add(hemisphere);
 
@@ -570,10 +698,10 @@ export class WorldRenderer {
     sun.shadow.bias = -0.00025;
     sun.target.position.set(0, 0, -16);
     this.scene.add(sun, sun.target);
-    return sun;
+    return { hemisphere, directional: sun };
   }
 
-  private createGround(): void {
+  private createGround(): GroundMaterials {
     const grassMaterial = new MeshStandardMaterial({ color: 0x159c42, roughness: 0.94 });
     const dirtMaterial = new MeshStandardMaterial({ color: 0xa76735, roughness: 0.98 });
     const verge = new Mesh(new PlaneGeometry(72, 420), grassMaterial);
@@ -589,9 +717,13 @@ export class WorldRenderer {
     road.position.set(0, -0.075, -155);
     road.receiveShadow = true;
     this.world.add(road);
+    return { verge: grassMaterial, road: dirtMaterial };
   }
 
-  private createLaneMarkers(): InstancedMesh {
+  private createLaneMarkers(): {
+    readonly mesh: InstancedMesh;
+    readonly material: MeshStandardMaterial;
+  } {
     const geometry = new BoxGeometry(0.075, 0.025, 2.6);
     const material = new MeshStandardMaterial({
       color: 0xffe6a6,
@@ -605,7 +737,7 @@ export class WorldRenderer {
     markers.frustumCulled = false;
     markers.receiveShadow = true;
     this.instances.add(markers);
-    return markers;
+    return { mesh: markers, material };
   }
 
   private createSceneryTemplates(): void {
@@ -727,7 +859,8 @@ export class WorldRenderer {
       const longitudinal = Math.floor(slot / 2);
       const segment = treeStart + longitudinal;
       const side = slot % 2 === 0 ? -1 : 1;
-      const name: ForestPartName = segment % 2 === 0 ? 'KIT_Tree_A' : 'KIT_Tree_B';
+      const segmentZone = zoneAtDistance(segment * 5).id;
+      const name = sceneryPartForSegment('tree', segment, segmentZone);
       const x = side * (8.1 + hash01(segment * 11 + side) * 6.2);
       this.placeScenery(name, x, segment * 5 - distance, hash01(segment * 17 + side), 0.82, 1.38);
     }
@@ -738,7 +871,8 @@ export class WorldRenderer {
       const longitudinal = Math.floor(slot / 2);
       const segment = foliageStart + longitudinal;
       const side = slot % 2 === 0 ? -1 : 1;
-      const name: ForestPartName = segment % 2 === 0 ? 'KIT_Grass' : 'KIT_Fern';
+      const segmentZone = zoneAtDistance(segment * 1.7).id;
+      const name = sceneryPartForSegment('foliage', segment, segmentZone);
       const x = side * (6.7 + hash01(segment * 23 + side) * 8.7);
       this.placeScenery(name, x, segment * 1.7 - distance, hash01(segment * 29 + side), 0.7, 1.22);
     }
@@ -749,27 +883,42 @@ export class WorldRenderer {
       const longitudinal = Math.floor(slot / 2);
       const segment = detailStart + longitudinal;
       const side = slot % 2 === 0 ? -1 : 1;
-      const name: ForestPartName = segment % 2 === 0 ? 'KIT_Rock' : 'KIT_Mushroom';
+      const segmentZone = zoneAtDistance(segment * 7.5).id;
+      const name = sceneryPartForSegment('detail', segment, segmentZone);
       const x = side * (7.1 + hash01(segment * 31 + side) * 7.8);
       this.placeScenery(name, x, segment * 7.5 - distance, hash01(segment * 37 + side), 0.72, 1.25);
     }
 
-    const signs: readonly ForestPartName[] = [
-      'KIT_Sign_Stimmy',
-      'KIT_Sign_Trenches',
-      'KIT_Sign_Coping',
-      'KIT_Sign_Memes',
-    ];
     const signCycle = Math.floor(distance / 220) * 220;
-    signs.forEach((name, index) => {
-      for (let cycle = 0; cycle < 2; cycle += 1) {
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      for (let index = 0; index < 4; index += 1) {
         const at = signCycle + cycle * 220 + 34 + index * 43;
+        const name = signPartForSlot(index, zoneAtDistance(at).id);
         const side = index % 2 === 0 ? -1 : 1;
         this.placeScenery(name, side * 8.3, at - distance, side < 0 ? 0.42 : 0.58, 0.92, 1.04);
       }
-    });
+    }
 
     this.sceneryTemplates.forEach((template) => template.commit());
+  }
+
+  private updateZonePresentation(distance: number): void {
+    const zone = zoneAtDistance(distance);
+    if (zone.id === this.currentZoneId) return;
+
+    this.canvas.dataset.zone = zone.id;
+    const palette = WORLD_PALETTES[zone.id];
+    this.renderer.setClearColor(palette.clear, 0);
+    this.renderer.toneMappingExposure = palette.exposure;
+    if (this.scene.fog instanceof Fog) this.scene.fog.color.setHex(palette.fog);
+    this.hemisphereLight.color.setHex(palette.hemisphereSky);
+    this.hemisphereLight.groundColor.setHex(palette.hemisphereGround);
+    this.directionalLight.color.setHex(palette.sun);
+    this.groundMaterials.verge.color.setHex(palette.verge);
+    this.groundMaterials.road.color.setHex(palette.road);
+    this.laneMarkerMaterial.color.setHex(palette.lane);
+    this.laneMarkerMaterial.emissive.setHex(palette.laneEmissive);
+    this.currentZoneId = zone.id;
   }
 
   private placeScenery(

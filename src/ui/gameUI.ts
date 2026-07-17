@@ -1,5 +1,11 @@
-import { ASSET_URLS, BRAND } from '../config';
+import { ASSET_URLS, BRAND, GAME } from '../config';
 import type { SimulationSnapshot } from '../game/types';
+import {
+  ZONES,
+  zoneAtDistance,
+  type ZoneDefinition,
+  type ZoneId,
+} from '../game/zones';
 import type { ScoreRank } from './scoreCard';
 import { getScoreRank } from './scoreCard';
 
@@ -56,14 +62,14 @@ const contractMarkup = (className: string): string => `
   </div>
 `;
 
-const stageMarqueeMarkup = (): string => `
+const stageMarqueeMarkup = (zone: Readonly<ZoneDefinition> = ZONES[0]): string => `
   <div class="stage-marquee" data-stage-marquee>
     <span class="stage-marquee__checker" aria-hidden="true"></span>
     <span class="stage-marquee__chrome" aria-hidden="true"></span>
     <span class="stage-marquee__ring" aria-hidden="true"></span>
-    <span data-stage-label>STAGE 01</span>
-    <strong data-zone-label>TRENCH ZONE</strong>
-    <span data-act-label>ACT 1</span>
+    <span data-stage-label>${zone.stageLabel}</span>
+    <strong data-zone-label>${zone.zoneLabel}</strong>
+    <span data-act-label>${zone.actLabel}</span>
   </div>
 `;
 
@@ -88,6 +94,10 @@ export class GameUI {
   private readonly unsupported: HTMLElement;
   private readonly pausedDialog: HTMLDialogElement;
   private readonly resultsDialog: HTMLDialogElement;
+  private readonly transitionBanner: HTMLElement;
+  private readonly transitionStage: HTMLElement;
+  private readonly transitionZone: HTMLElement;
+  private readonly transitionAct: HTMLElement;
   private readonly status: HTMLElement;
   private readonly ringValue: HTMLElement;
   private readonly multiplierValue: HTMLElement;
@@ -110,6 +120,9 @@ export class GameUI {
   private destroyed = false;
   private focusBeforeDialog: HTMLElement | null = null;
   private dialogCompatibility: DialogCompatibilityState | null = null;
+  private projectedZoneId: ZoneId = ZONES[0].id;
+  private projectedDistance = 0;
+  private transitionUntilElapsed = Number.NEGATIVE_INFINITY;
 
   public constructor(
     private readonly root: HTMLElement,
@@ -199,7 +212,9 @@ export class GameUI {
 
       <section class="hud" data-view="hud" aria-label="Run statistics" hidden>
         <p class="hud__stage" data-hud-stage aria-hidden="true">
-          <span>P1&nbsp;</span><strong>TRENCH ZONE&nbsp;</strong><span>ACT 1</span>
+          <span data-hud-stage-label>${ZONES[0].stageLabel}</span>
+          <strong data-hud-zone-label>${ZONES[0].zoneLabel}</strong>
+          <span data-hud-act-label>${ZONES[0].actLabel}</span>
         </p>
         <div class="hud__metric"><small>RINGS</small><strong data-rings>0</strong></div>
         <div class="hud__metric hud__metric--gold"><small>COMBO</small><strong data-multiplier>1×</strong></div>
@@ -211,6 +226,12 @@ export class GameUI {
         </div>
         <p class="swipe-hint" aria-hidden="true">SWIPE ← ↑ →</p>
       </section>
+
+      <div class="zone-transition" data-zone-transition aria-hidden="true" hidden>
+        <span data-transition-stage>${ZONES[0].stageLabel}</span>
+        <strong data-transition-zone>${ZONES[0].zoneLabel}</strong>
+        <span data-transition-act>${ZONES[0].actLabel}</span>
+      </div>
 
       <dialog class="game-dialog pause-dialog" aria-labelledby="pause-title" data-dialog="pause">
         <div class="dialog-card">
@@ -275,6 +296,10 @@ export class GameUI {
     this.unsupported = this.required('[data-view="unsupported"]');
     this.pausedDialog = this.required<HTMLDialogElement>('[data-dialog="pause"]');
     this.resultsDialog = this.required<HTMLDialogElement>('[data-dialog="results"]');
+    this.transitionBanner = this.required('[data-zone-transition]');
+    this.transitionStage = this.required('[data-transition-stage]');
+    this.transitionZone = this.required('[data-transition-zone]');
+    this.transitionAct = this.required('[data-transition-act]');
     this.status = this.required('[data-status]');
     this.ringValue = this.required('[data-rings]');
     this.multiplierValue = this.required('[data-multiplier]');
@@ -297,6 +322,7 @@ export class GameUI {
     this.resultsDialog.addEventListener('cancel', this.handleResultsCancel);
     root.dataset.phase = 'loading';
     root.dataset.playerLane = '0';
+    this.projectZone(ZONES[0]);
   }
 
   public setLoading(progress: number): void {
@@ -311,6 +337,7 @@ export class GameUI {
 
   public showIntro(): void {
     if (this.destroyed) return;
+    this.resetZoneProjection();
     this.setPhase('intro');
     this.closeDialogs(true);
   }
@@ -463,13 +490,82 @@ export class GameUI {
   private setPhase(phase: AppPhase, snapshot?: Readonly<SimulationSnapshot>): void {
     this.phase = phase;
     this.root.dataset.phase = phase;
-    if (snapshot) this.root.dataset.playerLane = String(snapshot.lane);
-    if (snapshot) this.root.dataset.playerAirborne = String(snapshot.playerY > 0.02);
+    if (snapshot) {
+      this.root.dataset.playerLane = String(snapshot.lane);
+      this.root.dataset.playerAirborne = String(snapshot.playerY > 0.02);
+      this.projectSnapshotZone(snapshot, phase === 'playing');
+    } else if (phase !== 'loading' && phase !== 'intro') {
+      this.transitionBanner.hidden = true;
+    }
     this.loading.hidden = phase !== 'loading';
     this.intro.hidden = phase !== 'intro';
     this.hud.hidden = phase !== 'playing';
     this.unsupported.hidden = phase !== 'unsupported';
     this.root.classList.toggle('is-playing', phase === 'playing');
+  }
+
+  private projectSnapshotZone(
+    snapshot: Readonly<SimulationSnapshot>,
+    canTransition: boolean,
+  ): void {
+    const zone = zoneAtDistance(snapshot.distance);
+    const restarted = snapshot.distance + 0.25 < this.projectedDistance;
+    const changed = zone.id !== this.projectedZoneId;
+
+    if (changed) this.projectZone(zone);
+    if (restarted) {
+      this.transitionBanner.hidden = true;
+      this.transitionUntilElapsed = Number.NEGATIVE_INFINITY;
+    } else if (canTransition && changed) {
+      this.transitionStage.textContent = zone.stageLabel;
+      this.transitionZone.textContent = zone.zoneLabel;
+      this.transitionAct.textContent = zone.actLabel;
+      this.transitionBanner.hidden = false;
+      this.transitionUntilElapsed = snapshot.elapsed + GAME.zoneTransitionSeconds;
+      this.announce(`${zone.stageLabel} — ${zone.zoneLabel} — ${zone.actLabel}`);
+    } else if (!canTransition || snapshot.elapsed >= this.transitionUntilElapsed) {
+      this.transitionBanner.hidden = true;
+    }
+
+    this.projectedZoneId = zone.id;
+    this.projectedDistance = snapshot.distance;
+  }
+
+  private projectZone(zone: Readonly<ZoneDefinition>): void {
+    this.root.dataset.zone = zone.id;
+    this.root.dataset.stage = String(zone.stage).padStart(2, '0');
+    this.root.dataset.act = '1';
+    for (const label of this.root.querySelectorAll<HTMLElement>('[data-stage-label]')) {
+      label.textContent = zone.stageLabel;
+    }
+    for (const label of this.root.querySelectorAll<HTMLElement>('[data-zone-label]')) {
+      label.textContent = zone.zoneLabel;
+    }
+    for (const label of this.root.querySelectorAll<HTMLElement>('[data-act-label]')) {
+      label.textContent = zone.actLabel;
+    }
+    this.required('[data-hud-stage-label]').textContent = zone.stageLabel;
+    this.required('[data-hud-zone-label]').textContent = zone.zoneLabel;
+    this.required('[data-hud-act-label]').textContent = zone.actLabel;
+    this.hud.setAttribute(
+      'aria-label',
+      `Run statistics, ${zone.stageLabel}, ${zone.zoneLabel}, ${zone.actLabel}`,
+    );
+    this.loadingMeter.setAttribute('aria-label', `Loading ${zone.stageLabel}`);
+  }
+
+  private resetZoneProjection(): void {
+    const initialZone = ZONES[0];
+    if (
+      this.projectedZoneId !== initialZone.id
+      || this.root.dataset.zone !== initialZone.id
+    ) {
+      this.projectZone(initialZone);
+    }
+    this.projectedZoneId = initialZone.id;
+    this.projectedDistance = 0;
+    this.transitionUntilElapsed = Number.NEGATIVE_INFINITY;
+    this.transitionBanner.hidden = true;
   }
 
   private projectMetrics(snapshot: Readonly<SimulationSnapshot>): void {

@@ -1,6 +1,7 @@
 import { GAME } from '../config';
 import { XorShift32 } from './random';
 import type { CoinSpawn, Lane, ObstacleKind, ObstacleSpawn, SpawnRow } from './types';
+import { speedAtDistance, zoneAtDistance, type ZoneId } from './zones';
 
 type LaneRole = 0 | 1 | 2;
 
@@ -20,6 +21,11 @@ interface SpawnTemplate {
   readonly name: string;
   readonly coins: readonly CoinTemplate[];
   readonly obstacles: readonly ObstacleTemplate[];
+}
+
+interface WeightedSpawnTemplate {
+  readonly template: SpawnTemplate;
+  readonly weight: number;
 }
 
 const freezeTemplate = (
@@ -83,16 +89,33 @@ const ALL_TEMPLATES = Object.freeze([
   LOG_PLUS_HARD_BLOCKERS,
 ] as const);
 
+const weightedTemplates = (
+  weights: readonly [
+    straight: number,
+    weave: number,
+    singleLog: number,
+    hardBlockers: number,
+    logAndBlockers: number,
+  ],
+): readonly WeightedSpawnTemplate[] => Object.freeze(
+  ALL_TEMPLATES.map((template, index) => Object.freeze({
+    template,
+    weight: weights[index]!,
+  })),
+);
+
+const ZONE_TEMPLATE_WEIGHTS: Readonly<Record<ZoneId, readonly WeightedSpawnTemplate[]>> = Object.freeze({
+  'ringwood-rush': weightedTemplates([6, 4, 4, 3, 3]),
+  'liquidity-loop': weightedTemplates([2, 2, 3, 3, 2]),
+  'ansem-after-dark': weightedTemplates([1, 2, 3, 2, 4]),
+});
+
 const START_DISTANCE = 24;
 const WEAVE_LANE_CHANGE_SECONDS = 0.29;
 // A max-speed weave can place its final coin 10.44 m past the row. Keeping the
 // row for 12 m behind the player covers that offset plus the 1.2 m coin-retire
 // window, after which no item from the row can become active again.
 export const SPAWN_ROW_RETURN_BEHIND_DISTANCE = 12;
-
-const speedAtDistance = (distance: number): number => (
-  Math.min(GAME.maxSpeed, GAME.startSpeed + distance / 140)
-);
 
 const weaveHalfSpanAtDistance = (distance: number): number => (
   speedAtDistance(distance) * WEAVE_LANE_CHANGE_SECONDS
@@ -200,7 +223,15 @@ export class SpawnDirector {
       return TEACHING_TEMPLATES[this.rowCounter]!;
     }
 
-    const availableTemplates = distance < GAME.spawnAhead ? TEACHING_TEMPLATES : ALL_TEMPLATES;
-    return this.random.pick(availableTemplates);
+    if (distance < GAME.spawnAhead) return this.random.pick(TEACHING_TEMPLATES);
+
+    const weighted = ZONE_TEMPLATE_WEIGHTS[zoneAtDistance(distance).id];
+    const totalWeight = weighted.reduce((total, candidate) => total + candidate.weight, 0);
+    let roll = this.random.next() * totalWeight;
+    for (const candidate of weighted) {
+      roll -= candidate.weight;
+      if (roll < 0) return candidate.template;
+    }
+    return weighted.at(-1)!.template;
   }
 }

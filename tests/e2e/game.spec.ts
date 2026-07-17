@@ -317,7 +317,7 @@ test('boots as a stage-aware cartridge screen with accessible progress', async (
 test('presents one selected PRESS START action and complete stage identity', async ({ page }) => {
   await page.goto('/?seed=7&e2e=1');
   await expect(page.locator('[data-view="intro"] [data-stage-label]')).toHaveText('STAGE 01');
-  await expect(page.locator('[data-view="intro"] [data-zone-label]')).toHaveText('TRENCH ZONE');
+  await expect(page.locator('[data-view="intro"] [data-zone-label]')).toHaveText('RINGWOOD RUSH');
   await expect(page.locator('[data-view="intro"] [data-act-label]')).toHaveText('ACT 1');
   const start = page.getByRole('button', { name: 'PRESS START' });
   await expect(start).toBeVisible();
@@ -791,7 +791,7 @@ test('renders a cartridge HUD as one opaque stage strip', async ({ page }) => {
   await beginRun(page);
 
   const stage = page.locator('.hud > [data-hud-stage]:first-child');
-  await expect(stage).toHaveText(/P1\s+TRENCH ZONE\s+ACT 1/);
+  await expect(stage).toHaveText(/STAGE 01\s+RINGWOOD RUSH\s+ACT 1/);
   await expect(stage).toHaveAttribute('aria-hidden', 'true');
   await expect(page.locator('.hud__metric')).toHaveCount(4);
   await expect(page.locator('.hud__actions .hud-button')).toHaveCount(2);

@@ -6,10 +6,14 @@
 #app-ui[data-ui-theme='pixel-16'] {
   --px: 4px;
   --pixel-font: 'Press Start 2P', ui-monospace, monospace;
+  --zone-sky: #102b70;
+  --zone-chrome: #1740b8;
+  --zone-accent: #62eadb;
+  --zone-scanline: rgb(98 234 219 / 14%);
   --arcade-ink: #07092b;
-  --arcade-indigo: #102b70;
-  --arcade-cobalt: #1740b8;
-  --arcade-aqua: #62eadb;
+  --arcade-indigo: var(--zone-sky);
+  --arcade-cobalt: var(--zone-chrome);
+  --arcade-aqua: var(--zone-accent);
   --arcade-gold: #ffd43b;
   --arcade-orange: #ef7d2c;
   --arcade-cream: #fff4d0;
@@ -28,11 +32,30 @@
   font-family: var(--pixel-font);
 }
 
+#app-ui[data-ui-theme='pixel-16'][data-zone='liquidity-loop'] {
+  --zone-sky: #4d287f;
+  --zone-chrome: #a73f9f;
+  --zone-accent: #67f5ef;
+  --zone-scanline: rgb(255 99 190 / 15%);
+  --arcade-gold: #ffcf55;
+  --arcade-orange: #ef6d78;
+}
+
+#app-ui[data-ui-theme='pixel-16'][data-zone='ansem-after-dark'] {
+  --zone-sky: #101944;
+  --zone-chrome: #472c8f;
+  --zone-accent: #60f6ff;
+  --zone-scanline: rgb(226 62 255 / 17%);
+  --arcade-gold: #ffe66b;
+  --arcade-orange: #ff4fa8;
+  --arcade-coral: #ff4fd8;
+}
+
 #app-ui[data-arcade-shell='trench-circuit-94']::before {
   position: fixed;
   z-index: -1;
   inset: 0;
-  background: repeating-linear-gradient(0deg, transparent 0 3px, rgb(7 9 43 / 14%) 3px 4px);
+  background: repeating-linear-gradient(0deg, transparent 0 3px, var(--zone-scanline) 3px 4px);
   content: '';
   opacity: .45;
   pointer-events: none;
@@ -214,7 +237,7 @@
   inset: 18px;
   display: block;
   background:
-    repeating-linear-gradient(0deg, transparent 0 7px, rgb(98 234 219 / 8%) 7px 8px),
+    repeating-linear-gradient(0deg, transparent 0 7px, var(--zone-scanline) 7px 8px),
     linear-gradient(180deg, rgb(16 43 112 / 34%), rgb(7 9 43 / 18%) 70%, transparent);
   pointer-events: none;
 }
@@ -637,6 +660,24 @@
   83.333%, 100% { transform: translateY(calc(var(--meme-row) * -5)); }
 }
 
+@keyframes zone-card-enter {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -18px);
+  }
+
+  16%,
+  78% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}
+
 #app-ui[data-ui-theme='pixel-16'] :is(
   .loading-card,
   .intro-panel,
@@ -948,6 +989,30 @@
   gap: 0;
   align-self: stretch;
   border-left: 2px solid rgb(255 244 208 / 52%);
+}
+
+#app-ui[data-ui-theme='pixel-16'] .zone-transition {
+  border: 4px solid var(--arcade-cream);
+  color: var(--arcade-cream);
+  background:
+    linear-gradient(180deg, var(--arcade-cobalt) 0 9px, var(--arcade-ink) 9px calc(100% - 8px), var(--arcade-cobalt) calc(100% - 8px));
+  box-shadow:
+    6px 6px 0 var(--arcade-ink),
+    -4px -4px 0 var(--arcade-aqua);
+  font-family: var(--pixel-font);
+  line-height: 1.55;
+  animation: zone-card-enter 2.4s steps(8, end) both;
+}
+
+#app-ui[data-ui-theme='pixel-16'] .zone-transition span {
+  color: var(--arcade-gold);
+  font-size: .52rem;
+}
+
+#app-ui[data-ui-theme='pixel-16'] .zone-transition strong {
+  color: var(--arcade-aqua);
+  font-size: clamp(.72rem, 2vw, 1rem);
+  font-weight: 400;
 }
 
 #app-ui[data-ui-theme='pixel-16'] .hud .hud-button {

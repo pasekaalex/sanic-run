@@ -1,5 +1,6 @@
 import { GAME } from '../config';
 import { SPAWN_ROW_RETURN_BEHIND_DISTANCE, SpawnDirector } from './spawnDirector';
+import { speedAtDistance } from './zones';
 import type {
   ActiveCoin,
   ActiveObstacle,
@@ -146,7 +147,7 @@ export class GameSimulation {
     this.elapsedValue += dt;
     this.updatePlayerMotion(dt);
     this.distanceValue += this.speedValue * dt;
-    this.speedValue = Math.min(GAME.maxSpeed, GAME.startSpeed + this.distanceValue / 140);
+    this.speedValue = speedAtDistance(this.distanceValue);
     this.loadSpawns();
     this.collectCoins();
     this.collideWithObstacles();

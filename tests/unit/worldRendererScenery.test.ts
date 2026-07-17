@@ -1,7 +1,20 @@
-import { Matrix4, Object3D } from 'three';
-import { describe, expect, it } from 'vitest';
+import {
+  DirectionalLight,
+  Fog,
+  HemisphereLight,
+  Matrix4,
+  MeshStandardMaterial,
+  Object3D,
+  Scene,
+} from 'three';
+import { describe, expect, it, vi } from 'vitest';
+import { ZONES, type ZoneId } from '../../src/game/zones';
 import type { ForestPartName } from '../../src/render/assetLoader';
-import { WorldRenderer } from '../../src/render/worldRenderer';
+import {
+  sceneryPartForSegment,
+  signPartForSlot,
+  WorldRenderer,
+} from '../../src/render/worldRenderer';
 
 interface RecordedTemplate {
   readonly placements: Matrix4[];
@@ -61,6 +74,27 @@ const modelAtSegment = (
 }));
 
 describe('WorldRenderer scenery identity', () => {
+  it('uses deterministic, distinct per-zone scenery and sign selections', () => {
+    const zoneIds = ZONES.map((zone) => zone.id);
+    const signature = (zone: ZoneId, layer: 'tree' | 'foliage' | 'detail'): string => (
+      Array.from(
+        { length: 32 },
+        (_, segment) => sceneryPartForSegment(layer, segment, zone),
+      ).join('|')
+    );
+
+    for (const layer of ['tree', 'foliage', 'detail'] as const) {
+      const signatures = zoneIds.map((zone) => signature(zone, layer));
+      expect(new Set(signatures).size).toBe(zoneIds.length);
+      expect(signature(zoneIds[0]!, layer)).toBe(signature(zoneIds[0]!, layer));
+    }
+
+    const signOrders = zoneIds.map((zone) => (
+      Array.from({ length: 4 }, (_, slot) => signPartForSlot(slot, zone)).join('|')
+    ));
+    expect(new Set(signOrders).size).toBe(zoneIds.length);
+  });
+
   it('keeps foliage and detail models stable when their pool windows recycle', () => {
     const beforeFoliageRecycle = sceneryAt(1.699);
     const afterFoliageRecycle = sceneryAt(1.701);
@@ -93,5 +127,82 @@ describe('WorldRenderer scenery identity', () => {
       0,
       ['KIT_Rock', 'KIT_Mushroom'],
     ));
+  });
+
+  it('mutates stable palette references only when the distance-derived zone changes', () => {
+    const renderer = Object.create(WorldRenderer.prototype) as WorldRenderer;
+    const zoneWrites: string[] = [];
+    const dataset = new Proxy<Record<string, string>>({}, {
+      set(target, property, value: string) {
+        target[String(property)] = value;
+        zoneWrites.push(value);
+        return true;
+      },
+    });
+    const canvas = { dataset } as unknown as HTMLCanvasElement;
+    const scene = new Scene();
+    scene.fog = new Fog(0xffffff, 42, 225);
+    const hemisphereLight = new HemisphereLight();
+    const directionalLight = new DirectionalLight();
+    const groundMaterials = {
+      verge: new MeshStandardMaterial(),
+      road: new MeshStandardMaterial(),
+    };
+    const laneMarkerMaterial = new MeshStandardMaterial();
+    const webglRenderer = {
+      setClearColor: vi.fn(),
+      toneMappingExposure: 0,
+    };
+    Object.defineProperties(renderer, {
+      canvas: { configurable: true, value: canvas, writable: true },
+      renderer: { configurable: true, value: webglRenderer, writable: true },
+      scene: { configurable: true, value: scene, writable: true },
+      hemisphereLight: { configurable: true, value: hemisphereLight, writable: true },
+      directionalLight: { configurable: true, value: directionalLight, writable: true },
+      groundMaterials: { configurable: true, value: groundMaterials, writable: true },
+      laneMarkerMaterial: { configurable: true, value: laneMarkerMaterial, writable: true },
+      currentZoneId: { configurable: true, value: null, writable: true },
+    });
+    const updateZonePresentation = (
+      renderer as unknown as { updateZonePresentation(distance: number): void }
+    ).updateZonePresentation.bind(renderer);
+    const stableReferences = {
+      fog: scene.fog,
+      hemisphereLight,
+      directionalLight,
+      verge: groundMaterials.verge,
+      road: groundMaterials.road,
+      laneMarkerMaterial,
+    };
+
+    updateZonePresentation(0);
+    const ringwoodFog = scene.fog.color.getHex();
+    updateZonePresentation(500);
+    updateZonePresentation(840);
+    const liquidityFog = scene.fog.color.getHex();
+    updateZonePresentation(1_000);
+    updateZonePresentation(1_960);
+    const afterDarkFog = scene.fog.color.getHex();
+
+    expect(webglRenderer.setClearColor).toHaveBeenCalledTimes(3);
+    expect(zoneWrites).toEqual([
+      'ringwood-rush',
+      'liquidity-loop',
+      'ansem-after-dark',
+    ]);
+    expect(new Set([ringwoodFog, liquidityFog, afterDarkFog]).size).toBe(3);
+    expect(canvas.dataset.zone).toBe('ansem-after-dark');
+    expect({
+      fog: scene.fog,
+      hemisphereLight,
+      directionalLight,
+      verge: groundMaterials.verge,
+      road: groundMaterials.road,
+      laneMarkerMaterial,
+    }).toEqual(stableReferences);
+
+    groundMaterials.verge.dispose();
+    groundMaterials.road.dispose();
+    laneMarkerMaterial.dispose();
   });
 });
