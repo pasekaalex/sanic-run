@@ -58,6 +58,41 @@ const displaySite = (siteUrl: string): string => {
   return `${url.host}${path}`;
 };
 
+const drawProceduralBackground = (context: CanvasRenderingContext2D): void => {
+  const sky = context.createLinearGradient(0, 0, WIDTH, HEIGHT);
+  sky.addColorStop(0, '#050729');
+  sky.addColorStop(0.54, '#1237a6');
+  sky.addColorStop(1, '#08bcd1');
+  context.fillStyle = sky;
+  context.fillRect(0, 0, WIDTH, HEIGHT);
+
+  // A pixel sun and speed trails keep the no-asset card in the 90s arcade world.
+  context.fillStyle = '#ffe330';
+  for (let row = 0; row < 7; row += 1) {
+    const inset = Math.abs(3 - row) * 18;
+    context.fillRect(884 + inset, 90 + row * 24, 244 - inset * 2, 18);
+  }
+  context.fillStyle = 'rgba(255, 255, 255, .72)';
+  for (let streak = 0; streak < 6; streak += 1) {
+    context.fillRect(724 + streak * 38, 286 + streak * 19, 312 - streak * 34, 8);
+  }
+
+  const tile = 52;
+  for (let y = 0; y < 5; y += 1) {
+    for (let x = 0; x < 12; x += 1) {
+      context.fillStyle = (x + y) % 2 === 0 ? '#15226f' : '#ffe330';
+      context.fillRect(576 + x * tile, 430 + y * tile, tile, tile);
+    }
+  }
+
+  const copyPanel = context.createLinearGradient(0, 0, 760, 0);
+  copyPanel.addColorStop(0, 'rgba(2, 4, 31, .98)');
+  copyPanel.addColorStop(0.78, 'rgba(2, 4, 31, .88)');
+  copyPanel.addColorStop(1, 'rgba(2, 4, 31, 0)');
+  context.fillStyle = copyPanel;
+  context.fillRect(0, 0, 820, HEIGHT);
+};
+
 const canvasToPng = (canvas: HTMLCanvasElement): Promise<Blob> => new Promise((resolve, reject) => {
   canvas.toBlob((blob) => {
     if (blob === null || blob.size === 0 || blob.type !== 'image/png') {
@@ -80,8 +115,14 @@ export const renderScoreCard = async (
   const context = canvas.getContext('2d');
   if (context === null) throw new Error('score card canvas is unavailable');
 
-  const background = await adapter.loadImage(ASSET_URLS.scoreCard);
-  context.drawImage(background, 0, 0, WIDTH, HEIGHT);
+  let background: CanvasImageSource | null = null;
+  try {
+    background = await adapter.loadImage(ASSET_URLS.scoreCard);
+  } catch {
+    // The raster is decorative: retain a complete, shareable card without it.
+  }
+  if (background === null) drawProceduralBackground(context);
+  else context.drawImage(background, 0, 0, WIDTH, HEIGHT);
   context.textAlign = 'left';
   context.textBaseline = 'alphabetic';
   context.shadowColor = 'rgba(0, 0, 0, .55)';

@@ -1187,6 +1187,72 @@ test('fallback score sharing opens an encoded X intent and saves a PNG card', as
   expect((await save.getAttribute('href'))?.startsWith('blob:')).toBe(true);
 });
 
+test('failed score-card art falls back without reviving a stale run', async ({ page }) => {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(`${message.location().url}: ${message.text()}`);
+    }
+  });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: undefined });
+    window.open = (() => null) as typeof window.open;
+    const browserWindow = window as typeof window & { __sanicScoreCardBlobCount: number };
+    browserWindow.__sanicScoreCardBlobCount = 0;
+    const nativeToBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function toBlob(callback, type, quality) {
+      nativeToBlob.call(this, (blob) => {
+        browserWindow.__sanicScoreCardBlobCount += 1;
+        callback(blob);
+      }, type, quality);
+    };
+  });
+
+  let releaseFirstRequest = (): void => undefined;
+  const firstRequestGate = new Promise<void>((resolve) => {
+    releaseFirstRequest = resolve;
+  });
+  let scoreCardRequests = 0;
+  await page.route('**/media/sanic-score-card-bg.png', async (route) => {
+    scoreCardRequests += 1;
+    if (scoreCardRequests === 1) await firstRequestGate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: 'not-an-image',
+    });
+  });
+
+  await beginRun(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  const share = page.locator('[data-action="share"]');
+  await expect.poll(() => scoreCardRequests).toBe(1);
+  await expect(share).toBeDisabled();
+
+  await page.getByRole('button', { name: /^run it back$/i }).click();
+  releaseFirstRequest();
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+  await expect.poll(() => page.evaluate(() => (
+    window as typeof window & { __sanicScoreCardBlobCount: number }
+  ).__sanicScoreCardBlobCount)).toBe(1);
+  await expect(share).toBeDisabled();
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  await expect.poll(() => page.evaluate(() => (
+    window as typeof window & { __sanicScoreCardBlobCount: number }
+  ).__sanicScoreCardBlobCount)).toBe(2);
+  await expect(share).toBeEnabled();
+  await share.click();
+  const save = page.getByRole('link', { name: 'SAVE SCORE CARD' });
+  await expect(save).toBeVisible();
+  expect((await save.getAttribute('href'))?.startsWith('blob:')).toBe(true);
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
 test('native score sharing attaches a nonempty PNG with exact safe copy', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, '__sanicSharePayload', {

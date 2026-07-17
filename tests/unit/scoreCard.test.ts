@@ -54,7 +54,8 @@ describe('renderScoreCard', () => {
   it('renders all exact runtime values into a nonempty PNG', async () => {
     const fillText = vi.fn();
     const drawImage = vi.fn();
-    const context = { drawImage, fillText } as unknown as CanvasRenderingContext2D;
+    const fillRect = vi.fn();
+    const context = { drawImage, fillRect, fillText } as unknown as CanvasRenderingContext2D;
     const png = new Blob(['png-bytes'], { type: 'image/png' });
     const canvas = {
       width: 0,
@@ -62,9 +63,10 @@ describe('renderScoreCard', () => {
       getContext: vi.fn().mockReturnValue(context),
       toBlob: (callback: BlobCallback, type?: string) => callback(type === 'image/png' ? png : null),
     } as unknown as HTMLCanvasElement;
+    const background = { width: 1200, height: 675 } as CanvasImageSource;
     const adapter: ScoreCardAdapter = {
       createCanvas: vi.fn().mockReturnValue(canvas),
-      loadImage: vi.fn().mockResolvedValue({ width: 1200, height: 675 } as CanvasImageSource),
+      loadImage: vi.fn().mockResolvedValue(background),
     };
 
     const result = await renderScoreCard(
@@ -78,7 +80,57 @@ describe('renderScoreCard', () => {
     expect(result.size).toBeGreaterThan(0);
     expect(canvas.width).toBe(1200);
     expect(canvas.height).toBe(675);
-    expect(drawImage).toHaveBeenCalled();
+    expect(drawImage).toHaveBeenCalledWith(background, 0, 0, 1200, 675);
+    expect(fillRect).not.toHaveBeenCalled();
+    const labels = fillText.mock.calls.map(([value]) => String(value));
+    expect(labels).toEqual(expect.arrayContaining([
+      '$SANIC', 'SCORE 12,345', 'RINGS 27', 'DISTANCE 433m', 'FULL PORT', 'sanic.test',
+    ]));
+  });
+
+  it.each([
+    ['error', new Error('background missing')],
+    ['abort', new DOMException('background request aborted', 'AbortError')],
+  ])('renders a procedural PNG when background loading ends in %s', async (_kind, failure) => {
+    const addColorStop = vi.fn();
+    const createLinearGradient = vi.fn().mockReturnValue({
+      addColorStop,
+    } as unknown as CanvasGradient);
+    const fillRect = vi.fn();
+    const fillText = vi.fn();
+    const drawImage = vi.fn();
+    const context = {
+      createLinearGradient,
+      drawImage,
+      fillRect,
+      fillText,
+    } as unknown as CanvasRenderingContext2D;
+    const png = new Blob(['procedural-png'], { type: 'image/png' });
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn().mockReturnValue(context),
+      toBlob: (callback: BlobCallback, type?: string) => callback(type === 'image/png' ? png : null),
+    } as unknown as HTMLCanvasElement;
+    const adapter: ScoreCardAdapter = {
+      createCanvas: vi.fn().mockReturnValue(canvas),
+      loadImage: vi.fn().mockRejectedValue(failure),
+    };
+
+    const result = await renderScoreCard(
+      snapshot(12_345),
+      'FULL PORT',
+      'https://sanic.test/',
+      adapter,
+    );
+
+    expect(result).toBe(png);
+    expect(result.type).toBe('image/png');
+    expect(result.size).toBeGreaterThan(0);
+    expect(drawImage).not.toHaveBeenCalled();
+    expect(createLinearGradient).toHaveBeenCalled();
+    expect(addColorStop).toHaveBeenCalled();
+    expect(fillRect).toHaveBeenCalledWith(0, 0, 1200, 675);
     const labels = fillText.mock.calls.map(([value]) => String(value));
     expect(labels).toEqual(expect.arrayContaining([
       '$SANIC', 'SCORE 12,345', 'RINGS 27', 'DISTANCE 433m', 'FULL PORT', 'sanic.test',
@@ -99,5 +151,47 @@ describe('renderScoreCard', () => {
 
     await expect(renderScoreCard(snapshot(1), 'SIDELINED', 'https://sanic.test', adapter))
       .rejects.toThrow('score card canvas');
+  });
+
+  it('rejects empty PNG encoder output explicitly', async () => {
+    const context = {
+      drawImage: vi.fn(),
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn().mockReturnValue(context),
+      toBlob: (callback: BlobCallback) => callback(null),
+    } as unknown as HTMLCanvasElement;
+    const adapter: ScoreCardAdapter = {
+      createCanvas: () => canvas,
+      loadImage: vi.fn().mockResolvedValue({} as CanvasImageSource),
+    };
+
+    await expect(renderScoreCard(snapshot(1), 'SIDELINED', 'https://sanic.test', adapter))
+      .rejects.toThrow('score card PNG could not be created');
+  });
+
+  it('reports a thrown PNG encoder failure without swallowing it', async () => {
+    const context = {
+      drawImage: vi.fn(),
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn().mockReturnValue(context),
+      toBlob: () => {
+        throw new Error('PNG encoder exploded');
+      },
+    } as unknown as HTMLCanvasElement;
+    const adapter: ScoreCardAdapter = {
+      createCanvas: () => canvas,
+      loadImage: vi.fn().mockResolvedValue({} as CanvasImageSource),
+    };
+
+    await expect(renderScoreCard(snapshot(1), 'SIDELINED', 'https://sanic.test', adapter))
+      .rejects.toThrow('PNG encoder exploded');
   });
 });
