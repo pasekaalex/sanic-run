@@ -10,8 +10,27 @@ const EXPECTED_WEAVE_PERMUTATIONS = Object.freeze([
   '0,-1,1',
   '1,-1,0',
 ]);
+const ONE_HOUR_SECONDS = 60 * 60;
+const ROW_RENDER_BEHIND_DISTANCE = 12;
+const MINIMUM_ROW_SPACING = 12 + GAME.startSpeed * 0.32;
+const MAXIMUM_RETAINED_ROWS = Math.ceil(
+  (GAME.spawnAhead + ROW_RENDER_BEHIND_DISTANCE) / MINIMUM_ROW_SPACING,
+) + 1;
 
 const orderedCoins = (row: SpawnRow) => [...row.coins].sort((a, b) => a.offset - b.offset);
+
+const rowsThrough = (seed: number, maxDistance: number): readonly SpawnRow[] => {
+  const director = new SpawnDirector(seed);
+  const rows = new Map<string, SpawnRow>();
+  const batchDistance = GAME.spawnAhead / 2;
+
+  for (let distance = batchDistance; distance < maxDistance; distance += batchDistance) {
+    for (const row of director.takeUntil(distance)) rows.set(row.id, row);
+  }
+  for (const row of director.takeUntil(maxDistance)) rows.set(row.id, row);
+
+  return [...rows.values()].sort((left, right) => left.at - right.at);
+};
 
 const isLaneWeave = (row: SpawnRow): boolean => (
   row.obstacles.length === 0
@@ -40,7 +59,7 @@ const weaveRowsByPermutation = (
   const rowsByPermutation = new Map<string, SpawnRow>();
 
   for (let seed = 1; seed <= 128 && rowsByPermutation.size < GAME.lanes.length; seed += 1) {
-    const rows = new SpawnDirector(seed).takeUntil(3_000);
+    const rows = rowsThrough(seed, 3_000);
     for (const row of rows.filter(isLaneWeave)) {
       const firstCoinAt = row.at + Math.min(...row.coins.map((coin) => coin.offset));
       const matchesPhase = phase === 'opening'
@@ -90,8 +109,22 @@ describe('SpawnDirector', () => {
     expect(resettable.takeUntil(220)).toEqual(a);
   });
 
+  it('returns a row through its behind-player safety margin and prunes it immediately after', () => {
+    const director = new SpawnDirector(0x5a11c);
+    const firstRow = director.takeUntil(GAME.spawnAhead)[0]!;
+
+    expect(
+      director.takeUntil(firstRow.at + GAME.spawnAhead + ROW_RENDER_BEHIND_DISTANCE - 0.01)
+        .some((row) => row.id === firstRow.id),
+    ).toBe(true);
+    expect(
+      director.takeUntil(firstRow.at + GAME.spawnAhead + ROW_RENDER_BEHIND_DISTANCE + 0.01)
+        .some((row) => row.id === firstRow.id),
+    ).toBe(false);
+  });
+
   it('leaves a physically safe lane in every obstacle row', () => {
-    const rows = new SpawnDirector(42).takeUntil(3_000);
+    const rows = rowsThrough(42, 3_000);
     for (const row of rows.filter((candidate) => candidate.obstacles.length > 0)) {
       const blocked = new Set(row.obstacles.filter((item) => !item.jumpable).map((item) => item.lane));
       expect(blocked.size).toBeLessThan(3);
@@ -99,14 +132,14 @@ describe('SpawnDirector', () => {
   });
 
   it('starts with teaching patterns and increases spacing with required reaction time', () => {
-    const rows = new SpawnDirector(7).takeUntil(500);
+    const rows = rowsThrough(7, 500);
     expect(rows[0]?.at).toBeGreaterThanOrEqual(24);
     expect(rows.some((row) => row.coins.length >= 3)).toBe(true);
     expect(rows.every((row, index) => index === 0 || row.at > rows[index - 1]!.at)).toBe(true);
   });
 
   it('gives every multi-coin template distinct ascending offsets and a real jump arc', () => {
-    const rows = new SpawnDirector(7).takeUntil(3_000);
+    const rows = rowsThrough(7, 3_000);
     const multiCoinRows = rows.filter((row) => row.coins.length > 1);
     const hasDistinctAscendingOffsets = multiCoinRows.every((row) => {
       const offsets = row.coins.map((coin) => coin.offset);
@@ -126,7 +159,7 @@ describe('SpawnDirector', () => {
   });
 
   it('constrains the audited seed-1 adjacent full blockers without changing separated rows', () => {
-    const rows = new SpawnDirector(1).takeUntil(2_600);
+    const rows = rowsThrough(1, 2_600);
     expect(rows[122]?.at).toBeCloseTo(2_527.417552, 5);
     expect(rows[123]?.at).toBeCloseTo(2_550.937552, 5);
     expect([
@@ -144,7 +177,7 @@ describe('SpawnDirector', () => {
     const violations: string[] = [];
 
     for (let seed = 1; seed <= 128; seed += 1) {
-      const rows = new SpawnDirector(seed).takeUntil(3_000);
+      const rows = rowsThrough(seed, 3_000);
       for (let index = 1; index < rows.length; index += 1) {
         const previousLane = fullBlockerSafeLane(rows[index - 1]!);
         const lane = fullBlockerSafeLane(rows[index]!);
@@ -158,7 +191,7 @@ describe('SpawnDirector', () => {
   });
 
   it('scales only weave offsets with speed and keeps each weave inside its row budget', () => {
-    const rows = new SpawnDirector(7).takeUntil(3_000);
+    const rows = rowsThrough(7, 3_000);
     const weaveRows = rows.filter(isLaneWeave);
     const openingWeave = weaveRows.find((row) => row.id === 'row-1');
     const maximumWeaves = weaveRows.filter((row) => (
@@ -202,5 +235,30 @@ describe('SpawnDirector', () => {
       rings: collectWithEarliestLegalCommands(row),
     }));
     expect(results).toEqual(results.map((result) => ({ ...result, rings: 3 })));
+  });
+
+  it('keeps one hour of generated-row returns and retained rows bounded to lookahead', () => {
+    const seed = 0x5a11c;
+    const director = new SpawnDirector(seed);
+    const baseline = new SpawnDirector(seed).takeUntil(GAME.spawnAhead);
+    const generatedIds = new Set<string>();
+    let maximumReturned = 0;
+    let maximumRetained = 0;
+
+    for (let second = 0; second <= ONE_HOUR_SECONDS; second += 1) {
+      const playerDistance = second * GAME.maxSpeed;
+      const returned = director.takeUntil(playerDistance + GAME.spawnAhead);
+      maximumReturned = Math.max(maximumReturned, returned.length);
+      for (const row of returned) generatedIds.add(row.id);
+      const retained = (director as unknown as { rows: readonly SpawnRow[] }).rows;
+      maximumRetained = Math.max(maximumRetained, retained.length);
+    }
+
+    expect(generatedIds.size).toBeGreaterThan(5_000);
+    expect(maximumReturned).toBeLessThanOrEqual(MAXIMUM_RETAINED_ROWS);
+    expect(maximumRetained).toBeLessThanOrEqual(MAXIMUM_RETAINED_ROWS);
+
+    director.reset(seed);
+    expect(director.takeUntil(GAME.spawnAhead)).toEqual(baseline);
   });
 });

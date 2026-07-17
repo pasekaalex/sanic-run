@@ -85,6 +85,10 @@ const ALL_TEMPLATES = Object.freeze([
 
 const START_DISTANCE = 24;
 const WEAVE_LANE_CHANGE_SECONDS = 0.29;
+// A max-speed weave can place its final coin 10.44 m past the row. Keeping the
+// row for 12 m behind the player covers that offset plus the 1.2 m coin-retire
+// window, after which no item from the row can become active again.
+export const SPAWN_ROW_RETURN_BEHIND_DISTANCE = 12;
 
 const speedAtDistance = (distance: number): number => (
   Math.min(GAME.maxSpeed, GAME.startSpeed + distance / 140)
@@ -134,6 +138,10 @@ export class SpawnDirector {
       this.nextDistance = distance + spacingAtDistance(distance);
     }
 
+    const minimumReturnableDistance = maxDistance
+      - GAME.spawnAhead
+      - SPAWN_ROW_RETURN_BEHIND_DISTANCE;
+    this.rows = this.rows.filter((row) => row.at >= minimumReturnableDistance);
     return Object.freeze(this.rows.filter((row) => row.at <= maxDistance));
   }
 

@@ -3,6 +3,9 @@ import { GAME } from '../../src/config';
 import { GameSimulation, type SpawnSource } from '../../src/game/simulation';
 import type { CoinSpawn, ObstacleSpawn, SpawnRow } from '../../src/game/types';
 
+const ONE_HOUR_SECONDS = 60 * 60;
+const PRODUCTION_LOADED_ROW_LIMIT = 14;
+
 const advance = (game: GameSimulation, seconds: number): void => {
   for (let elapsed = 0; elapsed < seconds; elapsed += GAME.fixedStep) {
     game.step(GAME.fixedStep);
@@ -379,5 +382,80 @@ describe('GameSimulation', () => {
       jumpProgress: null,
       impactKind: null,
     });
+  });
+
+  it('keeps production loaded-row bookkeeping bounded through one hour and restarts deterministically', () => {
+    const seed = 0x5a11c;
+    const game = new GameSimulation(seed);
+    const fresh = new GameSimulation(seed);
+    game.start();
+    fresh.start();
+    const expectedOpening = fresh.snapshot();
+    const probe = game as unknown as {
+      distanceValue: number;
+      loadedRows: ReadonlyMap<string, number> | ReadonlySet<string>;
+      loadSpawns(): void;
+      collectCoins(): void;
+      collideWithObstacles(): void;
+    };
+    let maximumLoadedRows = probe.loadedRows.size;
+
+    for (let second = 1; second <= ONE_HOUR_SECONDS; second += 1) {
+      probe.distanceValue = second * GAME.maxSpeed;
+      probe.loadSpawns();
+      probe.collectCoins();
+      probe.collideWithObstacles();
+      maximumLoadedRows = Math.max(maximumLoadedRows, probe.loadedRows.size);
+    }
+
+    expect(maximumLoadedRows).toBeLessThanOrEqual(PRODUCTION_LOADED_ROW_LIMIT);
+    game.restart(seed);
+    expect(game.snapshot().coins).toEqual(expectedOpening.coins);
+    expect(game.snapshot().obstacles).toEqual(expectedOpening.obstacles);
+  });
+
+  it('prunes a production loaded-row identifier only after its source row stops returning', () => {
+    const game = new GameSimulation(0x5a11c);
+    const probe = game as unknown as {
+      distanceValue: number;
+      loadedRows: ReadonlyMap<string, number>;
+      loadSpawns(): void;
+    };
+    game.start();
+
+    probe.distanceValue = 35.99;
+    probe.loadSpawns();
+    expect(probe.loadedRows.has('row-0')).toBe(true);
+
+    probe.distanceValue = 36.01;
+    probe.loadSpawns();
+    expect(probe.loadedRows.has('row-0')).toBe(false);
+  });
+
+  it('keeps injected-source row identifiers for the lifetime of a run', () => {
+    const row = Object.freeze({
+      id: 'injected-lifetime-row',
+      at: 0,
+      coins: Object.freeze([
+        Object.freeze({ id: 'injected-lifetime-coin', lane: 0, height: 0.9, offset: 0.75 }),
+      ]),
+      obstacles: Object.freeze([]),
+    } satisfies SpawnRow);
+    const game = new GameSimulation(0x5a11c, scriptedSource([row]));
+    const probe = game as unknown as {
+      distanceValue: number;
+      activeCoins: readonly unknown[];
+      loadSpawns(): void;
+      collectCoins(): void;
+    };
+
+    game.start();
+    probe.distanceValue = 100;
+    probe.collectCoins();
+    expect(probe.activeCoins).toHaveLength(0);
+
+    probe.distanceValue = 10_000;
+    probe.loadSpawns();
+    expect(probe.activeCoins).toHaveLength(0);
   });
 });

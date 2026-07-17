@@ -94,6 +94,7 @@ const IDENTITY_QUATERNION = new Quaternion();
 const UNIT_SCALE = new Vector3(1, 1, 1);
 const CHARACTER_WORLD_HEIGHT = 4.12;
 const SPIN_BALL_WORLD_DIAMETER = 1.815;
+const RING_RENDER_BEHIND_DISTANCE = 12;
 const REQUIRED_POOL_CAPACITIES = Object.freeze({
   rings: 180,
   trees: 120,
@@ -305,7 +306,7 @@ export class WorldRenderer {
   private readonly dust: ParticlePool;
   private readonly placementDummy = new Object3D();
   private readonly lookTarget = new Vector3();
-  private readonly emittedCoins = new Set<string>();
+  private readonly emittedCoins = new Map<string, number>();
   private currentActionName: CharacterActionName | null = null;
   private lowEffects = false;
   private contextLost = false;
@@ -863,6 +864,11 @@ export class WorldRenderer {
     previous: Readonly<SimulationSnapshot>,
     current: Readonly<SimulationSnapshot>,
   ): void {
+    const minimumRenderedDistance = current.distance - RING_RENDER_BEHIND_DISTANCE;
+    for (const [id, distance] of this.emittedCoins) {
+      if (distance < minimumRenderedDistance) this.emittedCoins.delete(id);
+    }
+
     let pickups = Math.max(0, current.rings - previous.rings);
     if (pickups === 0) return;
     const currentIds = new Set(current.coins.map((coin) => coin.id));
@@ -871,7 +877,7 @@ export class WorldRenderer {
       .sort((left, right) => Math.abs(left.at - current.distance) - Math.abs(right.at - current.distance));
     for (const coin of removed) {
       if (pickups <= 0) break;
-      this.emittedCoins.add(coin.id);
+      this.emittedCoins.set(coin.id, coin.at);
       const origin = new Vector3(
         coin.lane * GAME.laneWidth,
         coin.height,

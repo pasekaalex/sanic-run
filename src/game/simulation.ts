@@ -1,5 +1,5 @@
 import { GAME } from '../config';
-import { SpawnDirector } from './spawnDirector';
+import { SPAWN_ROW_RETURN_BEHIND_DISTANCE, SpawnDirector } from './spawnDirector';
 import type {
   ActiveCoin,
   ActiveObstacle,
@@ -73,7 +73,7 @@ export class GameSimulation {
   private jumpElapsed: number | null = null;
   private jumpVelocity = 0;
   private queuedCommand: ActionCommand | null = null;
-  private loadedRows = new Set<string>();
+  private loadedRows = new Map<string, number>();
   private activeCoins: ActiveCoin[] = [];
   private activeObstacles: ActiveObstacle[] = [];
 
@@ -108,7 +108,7 @@ export class GameSimulation {
     this.jumpElapsed = null;
     this.jumpVelocity = 0;
     this.queuedCommand = null;
-    this.loadedRows = new Set<string>();
+    this.loadedRows = new Map<string, number>();
     this.activeCoins = [];
     this.activeObstacles = [];
     this.loadSpawns();
@@ -301,9 +301,16 @@ export class GameSimulation {
 
   private loadSpawns(): void {
     const rows = this.source.takeUntil(this.distanceValue + GAME.spawnAhead);
+    if (this.injectedSource === undefined) {
+      const minimumReturnableDistance = this.distanceValue - SPAWN_ROW_RETURN_BEHIND_DISTANCE;
+      for (const [id, distance] of this.loadedRows) {
+        if (distance < minimumReturnableDistance) this.loadedRows.delete(id);
+      }
+    }
+
     for (const row of rows) {
       if (this.loadedRows.has(row.id)) continue;
-      this.loadedRows.add(row.id);
+      this.loadedRows.set(row.id, row.at);
 
       for (const coin of row.coins) {
         this.activeCoins.push(Object.freeze({ ...coin, at: row.at + coin.offset }));
