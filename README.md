@@ -2,7 +2,7 @@
 
 Playable Three.js coin runner for `$SANIC`.
 
-- Live: https://sanic-run.vercel.app
+- Live: https://www.sanic.fun
 - Source: https://github.com/pasekaalex/sanic-run
 - X: https://x.com/memesofsanic
 - Pump.fun: https://pump.fun/coin/CMNDT7PK5gHY8ZknhzEC2Q7UMDs2b7LT6c1eX7Kepump
