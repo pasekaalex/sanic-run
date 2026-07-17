@@ -34,6 +34,12 @@ export const animationCrossfadeSeconds = (action: CharacterActionName): number =
   return 0.14;
 };
 
+export const runTimeScale = (speed: number, startSpeed: number): number => {
+  const safeStart = Number.isFinite(startSpeed) && startSpeed > 0 ? startSpeed : 1;
+  const safeSpeed = Number.isFinite(speed) ? Math.max(0, speed) : safeStart;
+  return Math.max(0.95, Math.min(1.55, safeSpeed / safeStart));
+};
+
 export const interpolateJumpProgress = (
   previousProgress: number | null,
   currentProgress: number | null,

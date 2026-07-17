@@ -47,6 +47,7 @@ import {
   interpolateJumpProgress,
   jumpClipTime,
   jumpPresentation,
+  runTimeScale,
 } from './animationTiming';
 import { uniformScaleForHeight } from './modelScale';
 import { nextSpinRotation } from './spinPresentation';
@@ -646,7 +647,7 @@ export class WorldRenderer {
   ): void {
     const desired = characterActionFor(snapshot.phase, jumpProgress);
     this.switchAnimation(desired);
-    this.actions.get('Run')?.setEffectiveTimeScale(MathUtils.clamp(snapshot.speed / GAME.startSpeed, 0.85, 1.8));
+    this.actions.get('Run')?.setEffectiveTimeScale(runTimeScale(snapshot.speed, GAME.startSpeed));
 
     const jump = this.actions.get('Jump');
     if (jump) jump.paused = desired === 'Jump';

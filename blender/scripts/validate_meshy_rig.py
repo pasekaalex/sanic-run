@@ -49,6 +49,10 @@ EXPECTED_ACTION_RANGES = {
     "Jump": (1, 30),
     "Crash": (1, 36),
 }
+EXPECTED_ACTION_RANGES_V2 = {
+    **EXPECTED_ACTION_RANGES,
+    "Run": (1, 17),
+}
 RIGGED_COLLECTION = "SANIC_RIGGED_EXPORT"
 
 
@@ -155,7 +159,12 @@ def action_ranges() -> dict[str, tuple[int, int]]:
     }
 
 
-def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
+def validate_run_cycle(
+    rig: bpy.types.Object,
+    end_frame: int,
+    passing_samples: tuple[tuple[int, str], tuple[int, str]],
+    minimum_hand_travel: float,
+) -> dict[str, float]:
     action = bpy.data.actions.get("Run")
     assert action is not None
     rig.animation_data_create()
@@ -169,7 +178,7 @@ def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
     left_hand_forward_positions: list[float] = []
     right_hand_forward_positions: list[float] = []
     passing_knee_heights: list[float] = []
-    for frame in range(1, 25):
+    for frame in range(1, end_frame + 1):
         scene.frame_set(frame)
         bpy.context.view_layer.update()
         root = rig.pose.bones["root"]
@@ -180,10 +189,11 @@ def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
         maximum_root_y = max(maximum_root_y, abs(displacement.y))
         left_hand_forward_positions.append(rig.pose.bones["hand.L"].head.y)
         right_hand_forward_positions.append(rig.pose.bones["hand.R"].head.y)
-        if frame == 4:
-            passing_knee_heights.append(rig.pose.bones["lower_leg.R"].head.z)
-        elif frame == 16:
-            passing_knee_heights.append(rig.pose.bones["lower_leg.L"].head.z)
+        for passing_frame, recovery_side in passing_samples:
+            if frame == passing_frame:
+                passing_knee_heights.append(
+                    rig.pose.bones[f"lower_leg.{recovery_side}"].head.z
+                )
         for obj in mesh_objects():
             evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
             minimum_ground_clearance = min(
@@ -193,7 +203,7 @@ def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
                     for corner in evaluated.bound_box
                 ),
             )
-        if frame in {1, 24}:
+        if frame in {1, end_frame}:
             destination = first_rotations if frame == 1 else final_rotations
             for bone in rig.pose.bones:
                 quaternion = bone.rotation_quaternion.normalized()
@@ -221,7 +231,9 @@ def validate_run_cycle(rig: bpy.types.Object) -> dict[str, float]:
         max(left_hand_forward_positions) - min(left_hand_forward_positions),
         max(right_hand_forward_positions) - min(right_hand_forward_positions),
     )
-    assert hand_travel >= 0.36, f"Run hand travel is too weak: {hand_travel:.6f} m"
+    assert hand_travel >= minimum_hand_travel, (
+        f"Run hand travel is too weak: {hand_travel:.6f} m"
+    )
     minimum_passing_knee_height = min(passing_knee_heights)
     assert minimum_passing_knee_height >= 0.46, (
         f"Run passing knee is too low: {minimum_passing_knee_height:.6f} m"
@@ -256,9 +268,13 @@ def validate_common(mode: str) -> dict[str, object]:
     bpy.context.scene.frame_set(0)
     bpy.context.view_layer.update()
 
+    rig_version = int(rig.get("sanic_rig_version", 1))
+    expected_ranges = (
+        EXPECTED_ACTION_RANGES_V2 if rig_version >= 2 else EXPECTED_ACTION_RANGES
+    )
     ranges = action_ranges()
-    assert ranges == EXPECTED_ACTION_RANGES, (
-        f"Action ranges differ: expected {EXPECTED_ACTION_RANGES}, got {ranges}"
+    assert ranges == expected_ranges, (
+        f"Action ranges differ: expected {expected_ranges}, got {ranges}"
     )
     minimum, maximum = world_bounds(meshes)
     dimensions = maximum - minimum
@@ -282,12 +298,18 @@ def validate_common(mode: str) -> dict[str, object]:
         if image.size[0] > 1024 or image.size[1] > 1024
     }
     assert not oversized_images, f"Web textures exceed 1024: {oversized_images}"
-    run = validate_run_cycle(rig)
+    run = validate_run_cycle(
+        rig,
+        end_frame=expected_ranges["Run"][1],
+        passing_samples=((5, "R"), (13, "L")) if rig_version >= 2 else ((4, "R"), (16, "L")),
+        minimum_hand_travel=0.28 if rig_version >= 2 else 0.36,
+    )
     return {
         "mode": mode,
         "meshes": len(meshes),
         "triangles": triangles,
         "bones": len(bones),
+        "rig_version": rig_version,
         "actions": ranges,
         "dimensions": [round(value, 6) for value in dimensions],
         "minimum": [round(value, 6) for value in minimum],

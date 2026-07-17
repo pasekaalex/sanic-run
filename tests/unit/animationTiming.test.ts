@@ -6,6 +6,7 @@ import {
   jumpPresentation,
   jumpClipTime,
   jumpStarted,
+  runTimeScale,
 } from '../../src/render/animationTiming';
 
 describe('animationTiming', () => {
@@ -37,6 +38,14 @@ describe('animationTiming', () => {
     expect(animationCrossfadeSeconds('Jump')).toBeLessThanOrEqual(0.04);
     expect(animationCrossfadeSeconds('Crash')).toBe(0.08);
     expect(animationCrossfadeSeconds('Run')).toBeGreaterThan(0.08);
+  });
+
+  it('plays the Run clip at sprint cadence from the opening pace onward', () => {
+    expect(runTimeScale(18, 18)).toBeCloseTo(1, 8);
+    expect(runTimeScale(27, 18)).toBeCloseTo(1.5, 8);
+    expect(runTimeScale(36, 18)).toBeCloseTo(1.55, 8);
+    expect(runTimeScale(0, 18)).toBeCloseTo(0.95, 8);
+    expect(runTimeScale(Number.NaN, 18)).toBeCloseTo(1, 8);
   });
 
   it('holds the final jump pose across the active-to-grounded interpolation edge', () => {

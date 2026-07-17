@@ -22,15 +22,21 @@ SOURCE_BLEND = Path(os.environ["SANIC_CORRECTED_BLEND"]).expanduser().resolve()
 OUTPUT_DIR = Path(
     os.environ.get("SANIC_RIG_OUTPUT_DIR", SOURCE_BLEND.parent)
 ).expanduser().resolve()
-RIGGED_BLEND = OUTPUT_DIR / "SANIC-meshy6-v1-rigged.blend"
-RIGGED_GLB = OUTPUT_DIR / "SANIC-meshy6-v1-rigged.glb"
+RIG_VARIANT = os.environ.get("SANIC_RIG_VARIANT", "v1").strip().lower()
+assert RIG_VARIANT in {"v1", "v2-run"}, f"Unknown SANIC rig variant: {RIG_VARIANT}"
+RIG_BASENAME = os.environ.get(
+    "SANIC_RIG_BASENAME",
+    "SANIC-meshy6-v1-rigged" if RIG_VARIANT == "v1" else "SANIC-meshy6-v2-run",
+).strip()
+RIGGED_BLEND = OUTPUT_DIR / f"{RIG_BASENAME}.blend"
+RIGGED_GLB = OUTPUT_DIR / f"{RIG_BASENAME}.glb"
 
 SOURCE_COLLECTION = "SANIC_CHARACTER_EXPORT"
 RIGGED_COLLECTION = "SANIC_RIGGED_EXPORT"
 RIG_NAME = "SANIC_Armature"
 ACTION_RANGES = {
     "Idle": (1, 60),
-    "Run": (1, 24),
+    "Run": (1, 24 if RIG_VARIANT == "v1" else 17),
     "Jump": (1, 30),
     "Crash": (1, 36),
 }
@@ -177,7 +183,9 @@ def create_armature(collection: bpy.types.Collection) -> bpy.types.Object:
         )
     bpy.ops.object.mode_set(mode="OBJECT")
     rig["sanic_rig"] = True
-    rig["sanic_rig_version"] = 1
+    rig["sanic_rig_version"] = 1 if RIG_VARIANT == "v1" else 2
+    if RIG_VARIANT != "v1":
+        rig["sanic_run_variant"] = RIG_VARIANT
     return rig
 
 
@@ -339,6 +347,29 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
     forward = Vector((0.0, -1.0, 0.0))
     up = Vector((0.0, 0.0, 1.0))
     character_meshes = [child for child in rig.children if child.type == "MESH"]
+    foot_region_vertices: dict[str, list[tuple[bpy.types.Object, list[int]]]] = {
+        "L": [],
+        "R": [],
+    }
+    for side in ("L", "R"):
+        group_names = {f"foot.{side}", f"toe.{side}"}
+        for obj in character_meshes:
+            group_indices = {
+                group.index for group in obj.vertex_groups if group.name in group_names
+            }
+            if not group_indices:
+                continue
+            vertex_indices = [
+                vertex.index
+                for vertex in obj.data.vertices
+                if any(
+                    membership.group in group_indices and membership.weight > 1e-4
+                    for membership in vertex.groups
+                )
+            ]
+            if vertex_indices:
+                foot_region_vertices[side].append((obj, vertex_indices))
+        assert foot_region_vertices[side], f"Missing weighted shoe region for {side}"
 
     def side_direction(side: str, values: tuple[float, float, float]) -> Vector:
         sign = -1.0 if side == "L" else 1.0
@@ -458,13 +489,48 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             for corner in evaluated.bound_box
         )
 
-    def key_pose(frame: int, pose: dict[str, object], previous: dict[str, object]) -> None:
+    def deformed_foot_minimum_z(side: str) -> float:
+        """Return the actual evaluated shoe sole height for one side."""
+        bpy.context.view_layer.update()
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        minimum = float("inf")
+        selected = 0
+        for obj, vertex_indices in foot_region_vertices[side]:
+            evaluated = obj.evaluated_get(depsgraph)
+            mesh = evaluated.to_mesh()
+            try:
+                for index in vertex_indices:
+                    if index >= len(mesh.vertices):
+                        continue
+                    minimum = min(
+                        minimum,
+                        (evaluated.matrix_world @ mesh.vertices[index].co).z,
+                    )
+                    selected += 1
+            finally:
+                evaluated.to_mesh_clear()
+        assert selected > 0 and math.isfinite(minimum), (side, selected, minimum)
+        return minimum
+
+    def key_pose(
+        frame: int,
+        pose: dict[str, object],
+        previous: dict[str, object],
+        ground_side: str | None = None,
+    ) -> None:
         solve_pose(pose)
-        minimum_z = deformed_minimum_z()
-        if minimum_z < 0.002:
-            root_offset = pose["root_offset"]
-            assert isinstance(root_offset, Vector)
+        root_offset = pose["root_offset"]
+        assert isinstance(root_offset, Vector)
+        if ground_side is not None:
+            # Ground the rendered shoe, not a toe-bone proxy. This permits a
+            # crisp initial strike and stable stance without flattening the
+            # airborne frames or changing any non-Run action.
+            minimum_z = deformed_foot_minimum_z(ground_side)
             set_root_offset(root_offset + up * (0.002 - minimum_z))
+        else:
+            minimum_z = deformed_minimum_z()
+            if minimum_z < 0.002:
+                set_root_offset(root_offset + up * (0.002 - minimum_z))
         for bone in rig.pose.bones:
             quaternion = bone.rotation_quaternion.copy().normalized()
             earlier = previous.get(bone.name)
@@ -480,6 +546,7 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         end: int,
         anchors: dict[int, dict[str, object]],
         cyclic: bool = False,
+        ground_sides: dict[int, str] | None = None,
     ) -> bpy.types.Action:
         assert min(anchors) == 1 and max(anchors) == end
         action = bpy.data.actions.new(name)
@@ -492,7 +559,12 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         previous: dict[str, object] = {}
         for frame in range(1, end + 1):
             scene.frame_set(frame)
-            key_pose(frame, pose_between(anchors, frame), previous)
+            key_pose(
+                frame,
+                pose_between(anchors, frame),
+                previous,
+                None if ground_sides is None else ground_sides.get(frame),
+            )
         for curve in layered_fcurves(action):
             for point in curve.keyframe_points:
                 point.interpolation = "LINEAR"
@@ -559,15 +631,63 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
     idle_breathe = pose(root_up=0.012, lean=3.0, pelvis_yaw=0.8, chest_yaw=-1.2, arms=same_arms(arm_relaxed), legs=same_legs(leg_neutral))
     idle = make("Idle", 60, {1: idle_start, 30: idle_breathe, 60: idle_start}, cyclic=True)
 
-    contact_a = pose(root_up=0.01, lean=16.0, pelvis_yaw=-6.0, chest_yaw=8.0, arms={"L": arm_back, "R": arm_forward}, legs={"L": leg_lead, "R": leg_rear})
-    passing_a = pose(root_up=-0.025, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_pass), legs={"L": leg_stance, "R": leg_swing})
-    contact_b = pose(root_up=0.01, lean=16.0, pelvis_yaw=6.0, chest_yaw=-8.0, arms={"L": arm_forward, "R": arm_back}, legs={"L": leg_rear, "R": leg_lead})
-    passing_b = pose(root_up=-0.025, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_pass), legs={"L": leg_swing, "R": leg_stance})
-    flight_a = blend_pose(passing_a, contact_b, 0.58)
-    flight_a["root_offset"] = up * 0.03
-    flight_b = blend_pose(passing_b, contact_a, 0.58)
-    flight_b["root_offset"] = up * 0.03
-    run = make("Run", 24, {1: contact_a, 4: passing_a, 7: flight_a, 13: contact_b, 16: passing_b, 19: flight_b, 24: contact_a}, cyclic=True)
+    if RIG_VARIANT == "v1":
+        contact_a = pose(root_up=0.01, lean=16.0, pelvis_yaw=-6.0, chest_yaw=8.0, arms={"L": arm_back, "R": arm_forward}, legs={"L": leg_lead, "R": leg_rear})
+        passing_a = pose(root_up=-0.025, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_pass), legs={"L": leg_stance, "R": leg_swing})
+        contact_b = pose(root_up=0.01, lean=16.0, pelvis_yaw=6.0, chest_yaw=-8.0, arms={"L": arm_forward, "R": arm_back}, legs={"L": leg_rear, "R": leg_lead})
+        passing_b = pose(root_up=-0.025, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_pass), legs={"L": leg_swing, "R": leg_stance})
+        flight_a = blend_pose(passing_a, contact_b, 0.58)
+        flight_a["root_offset"] = up * 0.03
+        flight_b = blend_pose(passing_b, contact_a, 0.58)
+        flight_b["root_offset"] = up * 0.03
+        run = make("Run", 24, {1: contact_a, 4: passing_a, 7: flight_a, 13: contact_b, 16: passing_b, 19: flight_b, 24: contact_a}, cyclic=True)
+    else:
+        # A compact 16-frame sprint period with an exact duplicate seam. The
+        # old 24-frame cycle kept a foot planted for half of every stride and
+        # read as a slow march against the fast-scrolling world. These poses
+        # add compression, heel recovery, and two true airborne phases while
+        # keeping the arms bent and in the sagittal plane.
+        sprint_arm_forward = ((0.025, 0.50, -0.866), (0.02, 0.866, 0.50), (0.015, 0.866, 0.50))
+        sprint_arm_back = ((0.025, -0.906, -0.423), (0.02, 0.423, -0.906), (0.015, 0.423, -0.906))
+        sprint_arm_mid_forward = ((0.025, 0.174, -0.985), (0.02, 0.985, 0.174), (0.015, 0.985, 0.174))
+        sprint_arm_mid_back = ((0.025, -0.643, -0.766), (0.02, 0.766, -0.643), (0.015, 0.766, -0.643))
+
+        sprint_contact_lead = ((0.025, 0.42, -0.907), (0.02, 0.12, -0.993), (0.015, 0.98, -0.20), (0.01, 0.995, -0.10))
+        sprint_contact_trail = ((0.025, -0.32, -0.948), (0.02, -0.76, -0.65), (0.015, 0.93, -0.37), (0.01, 0.993, -0.12))
+        sprint_down_support = ((0.025, 0.18, -0.984), (0.02, -0.45, -0.893), (0.015, 0.97, -0.24), (0.01, 0.995, -0.10))
+        sprint_down_recovery = ((0.025, -0.12, -0.993), (0.02, -0.98, -0.20), (0.015, 0.98, 0.20), (0.01, 0.995, 0.10))
+        sprint_passing_support = ((0.025, -0.18, -0.984), (0.02, -0.46, -0.888), (0.015, 0.98, -0.20), (0.01, 0.995, -0.10))
+        sprint_passing_recovery = ((0.025, 0.90, -0.435), (0.02, -0.52, -0.854), (0.015, 0.98, 0.20), (0.01, 0.995, 0.10))
+        sprint_flight_lead = ((0.025, 0.65, -0.76), (0.02, -0.10, -0.995), (0.015, 0.995, 0.10), (0.01, 0.998, 0.06))
+        sprint_flight_recovery = ((0.025, -0.38, -0.925), (0.02, -0.98, 0.20), (0.015, 0.95, 0.31), (0.01, 0.995, 0.10))
+
+        contact_a = pose(root_up=0.005, lean=14.0, pelvis_yaw=-4.0, chest_yaw=6.0, arms={"L": sprint_arm_back, "R": sprint_arm_forward}, legs={"L": sprint_contact_lead, "R": sprint_contact_trail})
+        down_a = pose(root_up=-0.018, lean=15.0, pelvis_yaw=-2.0, chest_yaw=3.0, arms={"L": sprint_arm_back, "R": sprint_arm_forward}, legs={"L": sprint_down_support, "R": sprint_down_recovery})
+        passing_a = pose(root_up=0.012, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms={"L": sprint_arm_mid_forward, "R": sprint_arm_mid_back}, legs={"L": sprint_passing_support, "R": sprint_passing_recovery})
+        flight_a = pose(root_up=0.032, lean=17.0, pelvis_yaw=3.0, chest_yaw=-5.0, arms={"L": sprint_arm_forward, "R": sprint_arm_back}, legs={"L": sprint_flight_recovery, "R": sprint_flight_lead})
+        contact_b = pose(root_up=0.005, lean=14.0, pelvis_yaw=4.0, chest_yaw=-6.0, arms={"L": sprint_arm_forward, "R": sprint_arm_back}, legs={"L": sprint_contact_trail, "R": sprint_contact_lead})
+        down_b = pose(root_up=-0.018, lean=15.0, pelvis_yaw=2.0, chest_yaw=-3.0, arms={"L": sprint_arm_forward, "R": sprint_arm_back}, legs={"L": sprint_down_recovery, "R": sprint_down_support})
+        passing_b = pose(root_up=0.012, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms={"L": sprint_arm_mid_back, "R": sprint_arm_mid_forward}, legs={"L": sprint_passing_recovery, "R": sprint_passing_support})
+        flight_b = pose(root_up=0.032, lean=17.0, pelvis_yaw=-3.0, chest_yaw=5.0, arms={"L": sprint_arm_back, "R": sprint_arm_forward}, legs={"L": sprint_flight_lead, "R": sprint_flight_recovery})
+        run = make(
+            "Run",
+            17,
+            {1: contact_a, 3: down_a, 5: passing_a, 7: flight_a, 9: contact_b, 11: down_b, 13: passing_b, 15: flight_b, 17: contact_a},
+            cyclic=True,
+            ground_sides={
+                1: "L",
+                2: "L",
+                3: "L",
+                4: "L",
+                5: "L",
+                9: "R",
+                10: "R",
+                11: "R",
+                12: "R",
+                13: "R",
+                17: "L",
+            },
+        )
 
     jump_entry = pose(root_up=0.0, lean=8.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_relaxed), legs=same_legs(leg_neutral))
     jump_crouch = pose(root_up=-0.08, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_back), legs=same_legs(leg_crouch))
@@ -670,9 +790,15 @@ def render_animation_previews(
     ground.data.materials.append(ground_material)
 
     checkpoints = {
-        "Run": (1, 4, 7, 10, 13, 16, 19, 22),
+        "Run": (
+            (1, 4, 7, 10, 13, 16, 19, 22)
+            if RIG_VARIANT == "v1"
+            else (1, 3, 5, 7, 9, 11, 13, 15, 17)
+        ),
         "Jump": (1, 4, 6, 9, 20, 24, 27, 30),
     }
+    if os.environ.get("SANIC_RUN_ONLY_PREVIEW") == "1":
+        checkpoints = {"Run": checkpoints["Run"]}
     views = {
         "front": Vector((0.0, -4.2, 0.86)),
         "side": Vector((-4.2, 0.0, 0.86)),
