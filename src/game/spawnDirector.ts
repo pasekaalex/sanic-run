@@ -116,6 +116,7 @@ export class SpawnDirector {
   private nextDistance = START_DISTANCE;
   private rowCounter = 0;
   private previousFullBlockerLane: Lane | null = null;
+  private previousRouteRequiredJump = false;
 
   constructor(seed: number) {
     this.random = new XorShift32(seed);
@@ -127,6 +128,7 @@ export class SpawnDirector {
     this.nextDistance = START_DISTANCE;
     this.rowCounter = 0;
     this.previousFullBlockerLane = null;
+    this.previousRouteRequiredJump = false;
   }
 
   takeUntil(maxDistance: number): readonly SpawnRow[] {
@@ -146,7 +148,13 @@ export class SpawnDirector {
   }
 
   private createRow(distance: number): SpawnRow {
-    const template = this.chooseTemplate(distance);
+    const proposedTemplate = this.chooseTemplate(distance);
+    // Jump and lane commands are serialized, so two all-lane jump rows at
+    // max speed leave less than a 200 ms touch-input window.
+    const template = this.previousRouteRequiredJump
+      && proposedTemplate === LOG_PLUS_HARD_BLOCKERS
+      ? TWO_HARD_BLOCKERS
+      : proposedTemplate;
     const proposedFocusLane = this.random.pick(GAME.lanes);
     const fullBlocker = isFullBlockerTemplate(template);
     const focusLane = fullBlocker
@@ -178,6 +186,7 @@ export class SpawnDirector {
 
     this.rowCounter += 1;
     this.previousFullBlockerLane = fullBlocker ? focusLane : null;
+    this.previousRouteRequiredJump = template === LOG_PLUS_HARD_BLOCKERS;
     return Object.freeze({
       id: `row-${rowIndex}`,
       at: distance,

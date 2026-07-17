@@ -16,6 +16,11 @@ const MINIMUM_ROW_SPACING = 12 + GAME.startSpeed * 0.32;
 const MAXIMUM_RETAINED_ROWS = Math.ceil(
   (GAME.spawnAhead + ROW_RENDER_BEHIND_DISTANCE) / MINIMUM_ROW_SPACING,
 ) + 1;
+// Twelve fixed steps leave one 200 ms touch/input-scheduling budget.
+const MOBILE_INPUT_BUFFER_SECONDS = 0.2;
+const MAX_JUMP_LEAD_FRAMES = 50;
+
+type LaneResponse = 'empty' | 'jump-required' | 'blocked';
 
 const orderedCoins = (row: SpawnRow) => [...row.coins].sort((a, b) => a.offset - b.offset);
 
@@ -43,7 +48,13 @@ const weavePermutation = (row: SpawnRow): string => (
   orderedCoins(row).map((coin) => coin.lane).join(',')
 );
 
-const fullBlockerSafeLane = (row: SpawnRow): Lane | null => {
+const laneResponseFromObstacles = (row: SpawnRow, lane: Lane): LaneResponse => {
+  const obstacles = row.obstacles.filter((obstacle) => obstacle.lane === lane);
+  if (obstacles.length === 0) return 'empty';
+  return obstacles.some((obstacle) => !obstacle.jumpable) ? 'blocked' : 'jump-required';
+};
+
+const fullBlockerRouteLane = (row: SpawnRow): Lane | null => {
   const blocked = new Set(
     row.obstacles
       .filter((obstacle) => !obstacle.jumpable)
@@ -51,6 +62,112 @@ const fullBlockerSafeLane = (row: SpawnRow): Lane | null => {
   );
   if (blocked.size !== GAME.lanes.length - 1) return null;
   return GAME.lanes.find((lane) => !blocked.has(lane)) ?? null;
+};
+
+const survivesRowInLane = (
+  row: SpawnRow,
+  lane: Lane,
+  jumpLeadFrames: number | null,
+): boolean => {
+  const source: SpawnSource = {
+    takeUntil: (maxDistance) => (row.at <= maxDistance ? Object.freeze([row]) : Object.freeze([])),
+  };
+  const game = new GameSimulation(0x5a11c, source);
+  game.start();
+  if (lane === -1) game.command('left');
+  if (lane === 1) game.command('right');
+
+  const jumpAt = jumpLeadFrames === null
+    ? Number.NEGATIVE_INFINITY
+    : row.at - jumpLeadFrames * GAME.fixedStep * GAME.maxSpeed;
+  let jumped = jumpLeadFrames === null;
+
+  for (let frame = 0; frame < 20_000; frame += 1) {
+    const snapshot = game.snapshot();
+    if (!jumped && snapshot.distance >= jumpAt) {
+      game.command('jump');
+      jumped = true;
+    }
+
+    game.step(GAME.fixedStep);
+    const stepped = game.snapshot();
+    if (stepped.phase === 'gameOver') return false;
+    if (stepped.distance > row.at + 2) return true;
+  }
+
+  throw new Error(`Fixed-step lane probe did not reach row ${row.id}`);
+};
+
+const laneResponseFromSimulation = (row: SpawnRow, lane: Lane): LaneResponse => {
+  if (survivesRowInLane(row, lane, null)) return 'empty';
+  for (let leadFrames = 1; leadFrames <= MAX_JUMP_LEAD_FRAMES; leadFrames += 1) {
+    if (survivesRowInLane(row, lane, leadFrames)) return 'jump-required';
+  }
+  return 'blocked';
+};
+
+const rowRequiresJump = (row: SpawnRow): boolean => {
+  const responses = GAME.lanes.map((lane) => laneResponseFromObstacles(row, lane));
+  return !responses.includes('empty') && responses.includes('jump-required');
+};
+
+const survivesAuditedRoutePair = (
+  first: SpawnRow,
+  second: SpawnRow,
+  firstJumpLeadFrames: number,
+): boolean => {
+  const rows = Object.freeze([first, second]);
+  const source: SpawnSource = {
+    takeUntil: (maxDistance) => rows.filter((row) => row.at <= maxDistance),
+  };
+  const game = new GameSimulation(0x5a11c, source);
+  const firstJumpAt = first.at - firstJumpLeadFrames * GAME.fixedStep * GAME.maxSpeed;
+  let firstJumpStarted = false;
+  let rightQueued = false;
+  let secondJumpQueued = false;
+  game.start();
+  game.command('left');
+
+  for (let frame = 0; frame < 20_000; frame += 1) {
+    const snapshot = game.snapshot();
+    if (!firstJumpStarted && snapshot.distance >= firstJumpAt) {
+      game.command('jump');
+      firstJumpStarted = true;
+    } else if (firstJumpStarted && !rightQueued && snapshot.jumpProgress !== null) {
+      game.command('right');
+      rightQueued = true;
+    } else if (
+      rightQueued
+      && !secondJumpQueued
+      && snapshot.jumpProgress === null
+      && snapshot.lane === 0
+      && snapshot.playerX < -0.01
+    ) {
+      game.command('jump');
+      secondJumpQueued = true;
+    }
+
+    game.step(GAME.fixedStep);
+    const stepped = game.snapshot();
+    if (stepped.phase === 'gameOver') return false;
+    if (stepped.distance > second.at + 2) return true;
+  }
+
+  throw new Error(`Fixed-step response probe did not reach ${first.id}->${second.id}`);
+};
+
+const longestConsecutiveFrameSpan = (frames: readonly number[]): number => {
+  let longest = 0;
+  let spanStart = frames[0] ?? 0;
+  let previous = frames[0] ?? 0;
+
+  for (const frame of frames.slice(1)) {
+    if (frame !== previous + 1) spanStart = frame;
+    previous = frame;
+    longest = Math.max(longest, previous - spanStart);
+  }
+
+  return longest;
 };
 
 const weaveRowsByPermutation = (
@@ -163,14 +280,55 @@ describe('SpawnDirector', () => {
     expect(rows[122]?.at).toBeCloseTo(2_527.417552, 5);
     expect(rows[123]?.at).toBeCloseTo(2_550.937552, 5);
     expect([
-      fullBlockerSafeLane(rows[122]!),
-      fullBlockerSafeLane(rows[123]!),
+      fullBlockerRouteLane(rows[122]!),
+      fullBlockerRouteLane(rows[123]!),
     ]).toEqual([-1, 0]);
 
     expect([
-      fullBlockerSafeLane(rows[22]!),
-      fullBlockerSafeLane(rows[24]!),
+      fullBlockerRouteLane(rows[22]!),
+      fullBlockerRouteLane(rows[24]!),
     ]).toEqual([-1, 1]);
+  });
+
+  it('gives the audited max-speed route at least 200 ms of real input latitude', () => {
+    const rows = rowsThrough(1, 2_600);
+    expect({
+      empty: laneResponseFromSimulation(rows[121]!, 0),
+      jumpRequired: laneResponseFromSimulation(rows[121]!, 1),
+      blocked: laneResponseFromSimulation(rows[122]!, 0),
+    }).toEqual({
+      empty: 'empty',
+      jumpRequired: 'jump-required',
+      blocked: 'blocked',
+    });
+
+    const successfulLeadFrames = Array.from(
+      { length: MAX_JUMP_LEAD_FRAMES },
+      (_, index) => index + 1,
+    ).filter((leadFrames) => survivesAuditedRoutePair(
+      rows[122]!,
+      rows[123]!,
+      leadFrames,
+    ));
+    expect(successfulLeadFrames.length).toBeGreaterThan(0);
+
+    const inputLatitude = longestConsecutiveFrameSpan(successfulLeadFrames) * GAME.fixedStep;
+    expect(inputLatitude).toBeGreaterThanOrEqual(MOBILE_INPUT_BUFFER_SECONDS);
+  });
+
+  it('never generates consecutive forced-jump routes through the speed cap for 128 seeds', () => {
+    const violations: string[] = [];
+
+    for (let seed = 1; seed <= 128; seed += 1) {
+      const rows = rowsThrough(seed, 3_000);
+      for (let index = 1; index < rows.length; index += 1) {
+        if (rowRequiresJump(rows[index - 1]!) && rowRequiresJump(rows[index]!)) {
+          violations.push(`${seed}:${rows[index - 1]!.id}->${rows[index]!.id}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
   });
 
   it('keeps adjacent full-blocker routes within one lane through the speed cap for 128 seeds', () => {
@@ -179,8 +337,8 @@ describe('SpawnDirector', () => {
     for (let seed = 1; seed <= 128; seed += 1) {
       const rows = rowsThrough(seed, 3_000);
       for (let index = 1; index < rows.length; index += 1) {
-        const previousLane = fullBlockerSafeLane(rows[index - 1]!);
-        const lane = fullBlockerSafeLane(rows[index]!);
+        const previousLane = fullBlockerRouteLane(rows[index - 1]!);
+        const lane = fullBlockerRouteLane(rows[index]!);
         if (previousLane !== null && lane !== null && Math.abs(lane - previousLane) > 1) {
           violations.push(`${seed}:${rows[index - 1]!.id}->${rows[index]!.id}`);
         }
