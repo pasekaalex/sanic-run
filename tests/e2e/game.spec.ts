@@ -970,6 +970,61 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
 });
 
+test('dialog fallback keeps the background inert and keyboard focus contained', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+      configurable: true,
+      value: (): never => {
+        throw new DOMException('Modal dialogs unavailable', 'NotSupportedError');
+      },
+    });
+  });
+  await beginRun(page);
+  await page.locator('[data-view="intro"]').evaluate((element) => {
+    if (!(element instanceof HTMLElement)) throw new Error('Missing intro panel');
+    element.inert = true;
+  });
+  await expect(page.locator('#game-canvas')).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  const dialogElement = page.locator('[data-dialog="pause"]');
+  const dialog = page.getByRole('dialog', { name: 'PAUSED' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute('role', 'dialog');
+  await expect(dialog).toHaveAttribute('aria-modal', 'true');
+  expect(await page.evaluate(() => {
+    const activeDialog = document.querySelector<HTMLDialogElement>('[data-dialog="pause"]')!;
+    const appUi = document.querySelector<HTMLElement>('#app-ui')!;
+    const background = [
+      ...[...appUi.children].filter((element) => element !== activeDialog),
+      ...[...document.body.children].filter((element) => element !== appUi),
+    ].filter((element): element is HTMLElement => element instanceof HTMLElement);
+    return background.every((element) => element.inert);
+  })).toBe(true);
+
+  const focusable = dialog.locator('button:not([disabled]), a[href]');
+  const first = focusable.first();
+  const last = focusable.last();
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(last).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(first).toBeFocused();
+
+  await first.click();
+  await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+  await expect(dialogElement).toBeHidden();
+  await expect(dialogElement).not.toHaveAttribute('role', 'dialog');
+  await expect(dialogElement).not.toHaveAttribute('aria-modal', 'true');
+  await expect(page.locator('#game-canvas')).toBeFocused();
+  expect(await page.evaluate(() => ({
+    canvas: document.querySelector<HTMLElement>('#game-canvas')!.inert,
+    topbar: document.querySelector<HTMLElement>('.topbar')!.inert,
+    hud: document.querySelector<HTMLElement>('[data-view="hud"]')!.inert,
+    intro: document.querySelector<HTMLElement>('[data-view="intro"]')!.inert,
+  }))).toEqual({ canvas: false, topbar: false, hud: false, intro: true });
+});
+
 test('keeps the coral GAME OVER heading large enough on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await beginRun(page);

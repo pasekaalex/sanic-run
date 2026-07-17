@@ -21,7 +21,27 @@ interface GameOverDetails {
   readonly shareReady: boolean;
 }
 
+interface InertState {
+  readonly element: HTMLElement;
+  readonly inert: boolean;
+}
+
+interface DialogCompatibilityState {
+  readonly dialog: HTMLDialogElement;
+  readonly background: readonly InertState[];
+  readonly role: string | null;
+  readonly ariaModal: string | null;
+}
+
 const externalAttributes = 'target="_blank" rel="noopener noreferrer"';
+const dialogFocusableSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
 
 const linkMarkup = (): string => `
   <a class="link-chip" href="${BRAND.pumpUrl}" ${externalAttributes} aria-label="View on Pump.fun">PUMP.FUN</a>
@@ -89,6 +109,7 @@ export class GameUI {
   private muted = false;
   private destroyed = false;
   private focusBeforeDialog: HTMLElement | null = null;
+  private dialogCompatibility: DialogCompatibilityState | null = null;
 
   public constructor(
     private readonly root: HTMLElement,
@@ -460,23 +481,81 @@ export class GameUI {
 
   private openDialog(dialog: HTMLDialogElement): void {
     const other = dialog === this.pausedDialog ? this.resultsDialog : this.pausedDialog;
-    if (other.open) other.close();
+    this.closeDialog(other);
     if (dialog.open) return;
     this.focusBeforeDialog = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     try {
       dialog.showModal();
     } catch {
-      dialog.setAttribute('open', '');
+      this.openDialogCompatibility(dialog);
     }
     dialog.querySelector<HTMLElement>('button:not([disabled]), a[href]')?.focus();
   }
 
   private closeDialogs(restoreFocus: boolean): void {
     for (const dialog of [this.pausedDialog, this.resultsDialog]) {
-      if (dialog.open) dialog.close();
+      this.closeDialog(dialog);
     }
     if (restoreFocus && this.focusBeforeDialog?.isConnected) this.focusBeforeDialog.focus();
     this.focusBeforeDialog = null;
+  }
+
+  private openDialogCompatibility(dialog: HTMLDialogElement): void {
+    const background = [
+      ...[...this.root.children].filter((element) => element !== dialog),
+      ...[...document.body.children].filter((element) => element !== this.root),
+    ].filter((element): element is HTMLElement => element instanceof HTMLElement)
+      .map((element) => ({ element, inert: element.inert }));
+
+    for (const { element } of background) element.inert = true;
+    this.dialogCompatibility = {
+      dialog,
+      background,
+      role: dialog.getAttribute('role'),
+      ariaModal: dialog.getAttribute('aria-modal'),
+    };
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('open', '');
+    dialog.addEventListener('keydown', this.handleCompatibilityDialogKeyDown);
+  }
+
+  private closeDialog(dialog: HTMLDialogElement): void {
+    if (dialog.open) dialog.close();
+    const compatibility = this.dialogCompatibility;
+    if (compatibility?.dialog !== dialog) return;
+
+    dialog.removeEventListener('keydown', this.handleCompatibilityDialogKeyDown);
+    for (const { element, inert } of compatibility.background) element.inert = inert;
+    this.restoreAttribute(dialog, 'role', compatibility.role);
+    this.restoreAttribute(dialog, 'aria-modal', compatibility.ariaModal);
+    this.dialogCompatibility = null;
+  }
+
+  private readonly handleCompatibilityDialogKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Tab') return;
+    const dialog = this.dialogCompatibility?.dialog;
+    if (dialog === undefined) return;
+    const focusable = [...dialog.querySelectorAll<HTMLElement>(dialogFocusableSelector)]
+      .filter((element) => element.getClientRects().length > 0);
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+
+    const active = document.activeElement;
+    if (event.shiftKey ? active === first || !dialog.contains(active) : active === last || !dialog.contains(active)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    }
+  };
+
+  private restoreAttribute(element: HTMLElement, name: string, value: string | null): void {
+    if (value === null) element.removeAttribute(name);
+    else element.setAttribute(name, value);
   }
 
   private required<ElementType extends HTMLElement = HTMLElement>(selector: string): ElementType {
