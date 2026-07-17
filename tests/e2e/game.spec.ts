@@ -489,6 +489,47 @@ test('disables themed transitions when reduced motion is requested', async ({ pa
   });
 });
 
+test('renders a cartridge HUD as one opaque stage strip', async ({ page }) => {
+  await beginRun(page);
+
+  const stage = page.locator('.hud > [data-hud-stage]:first-child');
+  await expect(stage).toHaveText(/P1\s+TRENCH ZONE\s+ACT 1/);
+  await expect(stage).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('.hud__metric')).toHaveCount(4);
+  await expect(page.locator('.hud__actions .hud-button')).toHaveCount(2);
+
+  const strip = await page.locator('.hud').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      backgroundImage: style.backgroundImage,
+      borderColor: style.borderTopColor,
+      boxShadow: style.boxShadow,
+    };
+  });
+  expect(strip.backgroundImage).toContain('linear-gradient');
+  expect(strip.borderColor).toBe('rgb(255, 244, 208)');
+  expect(strip.boxShadow).not.toBe('none');
+});
+
+test('keeps 700px cartridge HUD actions inside the viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 700 });
+  await beginRun(page);
+
+  const actionBoxes = await page.locator('.hud__actions .hud-button').evaluateAll((buttons) =>
+    buttons.map((button) => {
+      const { left, right, width, height } = button.getBoundingClientRect();
+      return { left, right, width, height };
+    }),
+  );
+  for (const box of actionBoxes) {
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(700);
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  await expect(page.locator('[data-hud-stage]')).toBeHidden();
+});
+
 test('keeps 390px HUD controls clear of every metric tile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await beginRun(page);
@@ -551,15 +592,94 @@ test('starts, responds to controls, pauses, crashes, and restarts', async ({ pag
     pauseOnSpin();
   }));
   await expect(page.getByRole('dialog', { name: 'PAUSED' })).toBeVisible();
+  await expect(page.locator('.pause-dialog [data-stage-label]')).toHaveText('STAGE 01');
+  const resume = page.getByRole('button', { name: /^resume$/i });
+  await expect(resume).toBeFocused();
   await expect(page.locator('#game-canvas')).toHaveAttribute('data-presentation', 'character');
   await expect(page.locator('#game-canvas')).toHaveAttribute('data-game-phase', 'paused');
-  await page.getByRole('button', { name: 'Resume' }).click();
+  const pausedTheme = await page.evaluate(() => {
+    const animationSelectors = [
+      '.attract-stage__grid',
+      '.attract-stage__checker',
+      '.pixel-ring',
+      '.title-lockup',
+      '.arcade-menu__cursor',
+      '.meme-reel__track',
+      '[data-view="intro"] .stage-marquee__checker',
+      '[data-view="intro"] .stage-marquee__ring',
+    ];
+    return {
+      headingColor: getComputedStyle(document.querySelector('.pause-dialog h2')!).color,
+      selectionColor: getComputedStyle(document.querySelector('[data-action="resume"]')!).backgroundColor,
+      attractPlayStates: animationSelectors.map((selector) =>
+        getComputedStyle(document.querySelector(selector)!).animationPlayState),
+    };
+  });
+  await resume.click();
   await page.keyboard.press('ArrowLeft');
   await expect(page.locator('#app-ui')).toHaveAttribute('data-player-lane', '-1');
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
   await expect(page.getByRole('dialog', { name: 'GAME OVER' })).toBeVisible();
-  await page.getByRole('button', { name: 'RUN IT BACK' }).click();
+  await expect(page.locator('.results-dialog [data-stage-label]')).toHaveText('STAGE 01');
+  const restart = page.getByRole('button', { name: /^run it back$/i });
+  await expect(restart).toBeFocused();
+
+  const resultsTheme = await page.evaluate(() => {
+    const grid = document.querySelector<HTMLElement>('.results-grid')!;
+    const rows = [...grid.querySelectorAll<HTMLElement>(':scope > div')];
+    const animationSelectors = [
+      '.attract-stage__grid',
+      '.attract-stage__checker',
+      '.pixel-ring',
+      '.title-lockup',
+      '.arcade-menu__cursor',
+      '.meme-reel__track',
+      '[data-view="intro"] .stage-marquee__checker',
+      '[data-view="intro"] .stage-marquee__ring',
+    ];
+    return {
+      headingColor: getComputedStyle(document.querySelector('.results-dialog h2')!).color,
+      selectionColor: getComputedStyle(document.querySelector('[data-action="restart"]')!).backgroundColor,
+      gridBackground: getComputedStyle(grid).backgroundColor,
+      nonFirstBorderLeftWidths: rows.slice(1).map((row) => getComputedStyle(row).borderLeftWidth),
+      rowShadows: rows.map((row) => getComputedStyle(row).boxShadow),
+      attractPlayStates: animationSelectors.map((selector) =>
+        getComputedStyle(document.querySelector(selector)!).animationPlayState),
+    };
+  });
+
+  expect(resultsTheme.gridBackground).toBe('rgb(7, 9, 43)');
+  expect(resultsTheme.nonFirstBorderLeftWidths).toEqual(['0px', '0px', '0px']);
+  expect(resultsTheme.rowShadows).toEqual(['none', 'none', 'none', 'none']);
+  expect(pausedTheme.headingColor).toBe('rgb(98, 234, 219)');
+  expect(resultsTheme.headingColor).toBe('rgb(237, 75, 79)');
+  expect(pausedTheme.selectionColor).toBe('rgb(255, 212, 59)');
+  expect(resultsTheme.selectionColor).toBe('rgb(255, 212, 59)');
+  expect(pausedTheme.attractPlayStates).toEqual(Array(8).fill('paused'));
+  expect(resultsTheme.attractPlayStates).toEqual(Array(8).fill('paused'));
+
+  await restart.click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
+});
+
+test('keeps the coral GAME OVER heading large enough on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await beginRun(page);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('sanic:e2e-crash')));
+  await expect(page.getByRole('dialog', { name: 'GAME OVER' })).toBeVisible();
+
+  const heading = await page.locator('.results-dialog h2').evaluate((element) => {
+    const style = getComputedStyle(element);
+    const panel = getComputedStyle(element.closest('.dialog-card')!);
+    return {
+      color: style.color,
+      background: panel.backgroundColor,
+      fontSize: Number.parseFloat(style.fontSize),
+    };
+  });
+  expect(heading.color).toBe('rgb(237, 75, 79)');
+  expect(heading.fontSize).toBeGreaterThanOrEqual(24);
+  expect(contrastRatio(heading.color, heading.background)).toBeGreaterThanOrEqual(3);
 });
 
 test('a persisted pagehide keeps the active game alive for BFCache restore', async ({ page, isMobile }) => {

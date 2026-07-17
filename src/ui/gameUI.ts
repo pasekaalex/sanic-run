@@ -172,6 +172,9 @@ export class GameUI {
       </section>
 
       <section class="hud" data-view="hud" aria-label="Run statistics" hidden>
+        <p class="hud__stage" data-hud-stage aria-hidden="true">
+          <span>P1&nbsp;</span><strong>TRENCH ZONE&nbsp;</strong><span>ACT 1</span>
+        </p>
         <div class="hud__metric"><small>RINGS</small><strong data-rings>0</strong></div>
         <div class="hud__metric hud__metric--gold"><small>COMBO</small><strong data-multiplier>1×</strong></div>
         <div class="hud__metric"><small>SCORE</small><strong data-score>0</strong></div>
