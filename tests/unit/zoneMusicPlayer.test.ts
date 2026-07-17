@@ -367,11 +367,54 @@ describe('ZoneMusicPlayer', () => {
       retainedBuffers: 0,
       running: true,
     });
+    await vi.waitFor(() => {
+      expect(
+        (player as unknown as { reconcileInFlight: boolean }).reconcileInFlight,
+      ).toBe(false);
+    });
+
+    for (let index = 0; index < 8; index += 1) {
+      player.setDistance(index);
+      await Promise.resolve();
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
 
     shouldFail = false;
     expect(() => player.setDistance(840)).not.toThrow();
     await waitForSnapshot(player, ({ activeZone }) => activeZone === 'liquidity-loop');
     expect(context.bufferSources).toHaveLength(1);
+  });
+
+  it('retries a latched same-zone failure only after an explicit transport resume', async () => {
+    const context = new FakeAudioContext();
+    let shouldFail = true;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+      if (shouldFail) throw new Error('offline');
+      return encodedResponse(1);
+    });
+    const fetcher = fetchMock as unknown as typeof fetch;
+    const player = new ZoneMusicPlayer(
+      context as unknown as AudioContext,
+      new FakeAudioNode() as unknown as AudioNode,
+      { fetcher },
+    );
+
+    player.start();
+    await vi.waitFor(() => {
+      expect(
+        (player as unknown as { reconcileInFlight: boolean }).reconcileInFlight,
+      ).toBe(false);
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+
+    shouldFail = false;
+    player.pause();
+    player.resume();
+
+    await waitForSnapshot(player, ({ activeZone }) => activeZone === 'ringwood-rush');
+    expect(fetchMock.mock.calls.filter(
+      ([url]) => url === '/music/ringwood-rush.mp3',
+    )).toHaveLength(2);
   });
 
   it('discards zone one when its fetch resolves after zone two is requested', async () => {

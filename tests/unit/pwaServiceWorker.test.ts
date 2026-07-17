@@ -12,6 +12,7 @@ type WorkerEventHandler = (event: Record<string, unknown>) => void;
 
 interface CacheDouble {
   readonly add: ReturnType<typeof vi.fn>;
+  readonly addAll: ReturnType<typeof vi.fn>;
   readonly match: ReturnType<typeof vi.fn>;
   readonly put: ReturnType<typeof vi.fn>;
 }
@@ -34,6 +35,7 @@ interface WorkerHarness {
 
 const createCacheDouble = (): CacheDouble => ({
   add: vi.fn().mockResolvedValue(undefined),
+  addAll: vi.fn().mockResolvedValue(undefined),
   match: vi.fn().mockResolvedValue(undefined),
   put: vi.fn().mockResolvedValue(undefined),
 });
@@ -153,6 +155,28 @@ describe('service-worker bundle fingerprint', () => {
     expect(createCacheVersion(changed)).not.toBe(createCacheVersion(files));
   });
 
+  it('changes whenever a stable-path runtime asset changes', () => {
+    const first = createVersionedServiceWorker({
+      buildFiles: [
+        ...files,
+        { fileName: 'models/sanic-runner.glb', contents: 'runner-v3' },
+      ],
+      immutableAssets: ['/assets/index-a1b2c3d4.js'],
+      runtimeWarmUrls: ['/models/sanic-runner.glb'],
+    });
+    const changed = createVersionedServiceWorker({
+      buildFiles: [
+        ...files,
+        { fileName: 'models/sanic-runner.glb', contents: 'runner-v4' },
+      ],
+      immutableAssets: ['/assets/index-a1b2c3d4.js'],
+      runtimeWarmUrls: ['/models/sanic-runner.glb'],
+    });
+
+    expect(changed.version).not.toBe(first.version);
+    expect(changed.source).not.toBe(first.source);
+  });
+
   it('selects only immutable Vite assets for precaching', () => {
     expect(immutableAssetUrls([
       'models/sanic-runner.glb',
@@ -207,9 +231,12 @@ describe('generated service-worker lifecycle', () => {
 
     await triggerWaitUntil(worker.handlers.get('install'));
 
-    const addedUrls = worker.shellCache.add.mock.calls.map(
-      ([request]) => (request as { readonly url: string }).url,
-    );
+    expect(worker.shellCache.addAll).toHaveBeenCalledOnce();
+    const addedUrls = (
+      worker.shellCache.addAll.mock.calls[0]?.[0] as readonly {
+        readonly url: string;
+      }[]
+    ).map(({ url }) => url);
     expect(addedUrls).toContain('/index.html');
     expect(addedUrls).toContain('/manifest.webmanifest');
     expect(addedUrls).toContain('/assets/index-a1b2c3d4.js');
@@ -220,6 +247,17 @@ describe('generated service-worker lifecycle', () => {
       || url.startsWith('/music/')
     ))).toBe(false);
     expect(worker.skipWaiting).toHaveBeenCalledOnce();
+  });
+
+  it('rejects installation atomically and keeps the incumbent worker when any shell asset fails', async () => {
+    const worker = compileWorker(source);
+    worker.shellCache.addAll.mockRejectedValue(new TypeError('asset unavailable'));
+
+    await expect(
+      triggerWaitUntil(worker.handlers.get('install')),
+    ).rejects.toThrow('asset unavailable');
+
+    expect(worker.skipWaiting).not.toHaveBeenCalled();
   });
 
   it('deletes only superseded SANIC caches and claims clients', async () => {

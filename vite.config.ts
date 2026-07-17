@@ -8,11 +8,6 @@ import {
   type ServiceWorkerBuildFile,
 } from './build/pwaServiceWorker';
 
-const STATIC_FINGERPRINT_FILES = Object.freeze([
-  'manifest.webmanifest',
-  'favicon.png',
-]);
-
 const RUNTIME_WARM_URLS = Object.freeze([
   '/models/sanic-runner.glb',
   '/models/sanic-spin-ball.glb',
@@ -23,6 +18,15 @@ const RUNTIME_WARM_URLS = Object.freeze([
   '/music/ringwood-rush.mp3',
   '/music/liquidity-loop.mp3',
   '/music/ansem-after-dark.mp3',
+]);
+
+const PUBLIC_FINGERPRINT_FILES = Object.freeze([
+  'manifest.webmanifest',
+  'favicon.png',
+  'icons/sanic-192.png',
+  'icons/sanic-512.png',
+  'icons/sanic-maskable-512.png',
+  ...RUNTIME_WARM_URLS.map((url) => url.replace(/^\/+/, '')),
 ]);
 
 const pwaServiceWorkerPlugin = (): Plugin => {
@@ -40,7 +44,7 @@ const pwaServiceWorkerPlugin = (): Plugin => {
         fileName: output.fileName,
         contents: output.type === 'chunk' ? output.code : output.source,
       }));
-      for (const filename of STATIC_FINGERPRINT_FILES) {
+      for (const filename of PUBLIC_FINGERPRINT_FILES) {
         buildFiles.push({
           fileName: filename,
           contents: readFileSync(resolve(root, 'public', filename)),

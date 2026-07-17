@@ -114,6 +114,22 @@ const REQUIRED_POOL_CAPACITIES = Object.freeze({
   grassAndFern: 360,
   rocksAndMushrooms: 80,
 });
+const SCENERY_POOL_CAPACITIES: Readonly<Partial<Record<ForestPartName, number>>> = Object.freeze({
+  KIT_Tree_A: REQUIRED_POOL_CAPACITIES.trees,
+  KIT_Tree_B: REQUIRED_POOL_CAPACITIES.trees,
+  KIT_Grass: REQUIRED_POOL_CAPACITIES.grassAndFern,
+  KIT_Fern: REQUIRED_POOL_CAPACITIES.grassAndFern,
+  KIT_Rock: REQUIRED_POOL_CAPACITIES.rocksAndMushrooms,
+  KIT_Mushroom: REQUIRED_POOL_CAPACITIES.rocksAndMushrooms,
+  KIT_Sign_Stimmy: 4,
+  KIT_Sign_Trenches: 4,
+  KIT_Sign_Coping: 4,
+  KIT_Sign_Memes: 4,
+});
+
+export const sceneryPoolCapacityForPart = (name: ForestPartName): number => (
+  SCENERY_POOL_CAPACITIES[name] ?? 0
+);
 
 const hash01 = (value: number): number => {
   const mixed = Math.sin(value * 12.9898 + 78.233) * 43_758.5453;
@@ -741,20 +757,8 @@ export class WorldRenderer {
   }
 
   private createSceneryTemplates(): void {
-    const capacities: Partial<Record<ForestPartName, number>> = {
-      KIT_Tree_A: REQUIRED_POOL_CAPACITIES.trees / 2,
-      KIT_Tree_B: REQUIRED_POOL_CAPACITIES.trees / 2,
-      KIT_Grass: REQUIRED_POOL_CAPACITIES.grassAndFern / 2,
-      KIT_Fern: REQUIRED_POOL_CAPACITIES.grassAndFern / 2,
-      KIT_Rock: REQUIRED_POOL_CAPACITIES.rocksAndMushrooms / 2,
-      KIT_Mushroom: REQUIRED_POOL_CAPACITIES.rocksAndMushrooms / 2,
-      KIT_Sign_Stimmy: 4,
-      KIT_Sign_Trenches: 4,
-      KIT_Sign_Coping: 4,
-      KIT_Sign_Memes: 4,
-    };
     for (const name of FOREST_PART_NAMES) {
-      const capacity = capacities[name];
+      const capacity = sceneryPoolCapacityForPart(name);
       const root = this.assets.forestParts.get(name);
       if (!capacity || !root) continue;
       this.sceneryTemplates.set(name, new InstancedTemplate(root, capacity, this.instances, true));

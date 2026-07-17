@@ -86,6 +86,7 @@ export class ZoneMusicPlayer {
   private active: LoadedSlot | null = null;
   private destroyed = false;
   private desiredRunning = false;
+  private failedZone: ZoneMusicId | null = null;
   private readonly fetcher: typeof fetch;
   private readonly loads = new Map<ZoneMusicId, Promise<LoadedSlot>>();
   private outgoing: LoadedSlot | null = null;
@@ -108,6 +109,7 @@ export class ZoneMusicPlayer {
     if (this.destroyed) return;
     if (reset) this.stopPlayback();
     this.desiredRunning = true;
+    this.failedZone = null;
     if (this.activateRetainedTrack()) return;
     this.requestReconcile();
   }
@@ -120,6 +122,7 @@ export class ZoneMusicPlayer {
   public resume(): void {
     if (this.destroyed) return;
     this.desiredRunning = true;
+    this.failedZone = null;
     if (this.activateRetainedTrack()) return;
     this.requestReconcile();
   }
@@ -142,6 +145,7 @@ export class ZoneMusicPlayer {
     if (track.id === this.requestedTrack.id) {
       if (
         this.active === null
+        && this.failedZone !== track.id
         && this.desiredRunning
         && !this.reconcileInFlight
       ) this.requestReconcile();
@@ -149,6 +153,7 @@ export class ZoneMusicPlayer {
     }
 
     this.requestedTrack = track;
+    this.failedZone = null;
     this.requestRevision += 1;
     this.releaseOutgoingImmediately();
     if (this.prefetched?.track.id !== track.id) this.prefetched = null;
@@ -167,6 +172,7 @@ export class ZoneMusicPlayer {
     this.outgoing = null;
     this.active = null;
     this.prefetched = null;
+    this.failedZone = null;
     this.loads.clear();
   }
 
@@ -246,7 +252,16 @@ export class ZoneMusicPlayer {
       this.prefetched = null;
     } else {
       this.prefetched = null;
-      loaded = await this.loadTrack(requested);
+      try {
+        loaded = await this.loadTrack(requested);
+      } catch (error) {
+        if (
+          !this.destroyed
+          && revision === this.requestRevision
+          && requested.id === this.requestedTrack.id
+        ) this.failedZone = requested.id;
+        throw error;
+      }
     }
 
     if (
@@ -255,6 +270,7 @@ export class ZoneMusicPlayer {
       || requested.id !== this.requestedTrack.id
     ) return;
 
+    this.failedZone = null;
     this.installRequested(loaded);
   }
 

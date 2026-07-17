@@ -119,6 +119,51 @@ describe('PWA registration gate', () => {
     await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
     expect(postMessage).toHaveBeenCalledWith({ type: 'WARM_RUNTIME' });
   });
+
+  it('waits for the newly registered worker instead of warming an incumbent active worker', async () => {
+    const incumbentPostMessage = vi.fn();
+    const incomingPostMessage = vi.fn();
+    const stateListeners = new Set<() => void>();
+    const incoming = {
+      state: 'installing',
+      postMessage: incomingPostMessage,
+      addEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === 'statechange') stateListeners.add(listener);
+      }),
+      removeEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === 'statechange') stateListeners.delete(listener);
+      }),
+    };
+    const incumbent = { postMessage: incumbentPostMessage };
+    const registration = {
+      active: incumbent,
+      installing: incoming,
+      waiting: null,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorkerRegistrar(register, {
+      controller: incumbent,
+      ready: Promise.resolve({
+        active: incumbent,
+      } as unknown as ServiceWorkerRegistration),
+    });
+    vi.spyOn(document, 'readyState', 'get').mockReturnValue('loading');
+    const { registerPwaAfterLoad } = await loadPwaModule();
+
+    registerPwaAfterLoad('production', Promise.resolve(true));
+    window.dispatchEvent(new Event('load'));
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
+
+    expect(incumbentPostMessage).not.toHaveBeenCalled();
+    expect(incomingPostMessage).not.toHaveBeenCalled();
+
+    incoming.state = 'activated';
+    for (const listener of [...stateListeners]) listener();
+
+    await vi.waitFor(() => expect(incomingPostMessage).toHaveBeenCalledOnce());
+    expect(incomingPostMessage).toHaveBeenCalledWith({ type: 'WARM_RUNTIME' });
+    expect(incumbentPostMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('fail-soft idempotent registration', () => {

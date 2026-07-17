@@ -30,9 +30,22 @@ const warmRuntimeCache = async (
   registration: ServiceWorkerRegistration,
 ): Promise<void> => {
   try {
-    const serviceWorker = navigator.serviceWorker;
-    const ready = await serviceWorker.ready;
-    const worker = ready.active ?? registration.active ?? serviceWorker.controller;
+    const incoming = registration.installing ?? registration.waiting ?? null;
+    const worker = incoming === null
+      ? registration.active ?? navigator.serviceWorker.controller
+      : await new Promise<ServiceWorker | null>((resolve) => {
+          const settle = (value: ServiceWorker | null): void => {
+            incoming.removeEventListener('statechange', handleStateChange);
+            resolve(value);
+          };
+          const handleStateChange = (): void => {
+            if (incoming.state === 'activated') settle(incoming);
+            else if (incoming.state === 'redundant') settle(null);
+          };
+
+          incoming.addEventListener('statechange', handleStateChange);
+          handleStateChange();
+        });
     worker?.postMessage({ type: 'WARM_RUNTIME' });
   } catch {
     // Offline support is optional and must never interrupt the game.

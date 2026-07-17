@@ -55,4 +55,3 @@ The game remains fully operable by keyboard, pointer/swipe, and touch. Dialog fo
 - Run all existing unit/Python/model validators and both normal/adversarial production builds.
 - Use only headless/no-browser-window checks for production smoke.
 - Publish only a fast-forward to `pasekaalex/sanic-run` and deploy only the linked Vercel `sanic-run` project at `sanic.fun`.
-

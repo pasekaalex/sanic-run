@@ -155,11 +155,8 @@ const warmRuntimeCache = async () => {
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(SHELL_CACHE);
-    await cache.add(new Request(APP_SHELL_URL, { cache: 'reload' }));
-    await Promise.allSettled(
-      PRECACHE_URLS
-        .filter((url) => url !== APP_SHELL_URL)
-        .map((url) => cache.add(new Request(url, { cache: 'reload' }))),
+    await cache.addAll(
+      PRECACHE_URLS.map((url) => new Request(url, { cache: 'reload' })),
     );
     await self.skipWaiting();
   })());

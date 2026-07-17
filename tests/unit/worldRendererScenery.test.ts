@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ZONES, type ZoneId } from '../../src/game/zones';
 import type { ForestPartName } from '../../src/render/assetLoader';
 import {
+  sceneryPoolCapacityForPart,
   sceneryPartForSegment,
   signPartForSlot,
   WorldRenderer,
@@ -127,6 +128,57 @@ describe('WorldRenderer scenery identity', () => {
       0,
       ['KIT_Rock', 'KIT_Mushroom'],
     ));
+  });
+
+  it('allocates every deterministic scenery variant for the most skewed render window', () => {
+    const layers = [
+      {
+        layer: 'tree',
+        parts: ['KIT_Tree_A', 'KIT_Tree_B'],
+        slots: 120,
+      },
+      {
+        layer: 'foliage',
+        parts: ['KIT_Grass', 'KIT_Fern'],
+        slots: 360,
+      },
+      {
+        layer: 'detail',
+        parts: ['KIT_Rock', 'KIT_Mushroom'],
+        slots: 80,
+      },
+    ] as const;
+
+    for (const { layer, parts, slots } of layers) {
+      const maximums = new Map<ForestPartName, number>(
+        parts.map((part) => [part, 0]),
+      );
+      for (const zone of ZONES) {
+        for (let windowStart = -64; windowStart <= 512; windowStart += 1) {
+          const counts = new Map<ForestPartName, number>(
+            parts.map((part) => [part, 0]),
+          );
+          for (let slot = 0; slot < slots; slot += 1) {
+            const segment = windowStart + Math.floor(slot / 2);
+            const part = sceneryPartForSegment(layer, segment, zone.id);
+            counts.set(part, (counts.get(part) ?? 0) + 1);
+          }
+          for (const part of parts) {
+            maximums.set(part, Math.max(
+              maximums.get(part) ?? 0,
+              counts.get(part) ?? 0,
+            ));
+          }
+        }
+      }
+
+      expect(Math.max(...maximums.values())).toBeGreaterThan(slots / 2);
+      for (const part of parts) {
+        expect(sceneryPoolCapacityForPart(part)).toBeGreaterThanOrEqual(
+          maximums.get(part) ?? Number.POSITIVE_INFINITY,
+        );
+      }
+    }
   });
 
   it('mutates stable palette references only when the distance-derived zone changes', () => {

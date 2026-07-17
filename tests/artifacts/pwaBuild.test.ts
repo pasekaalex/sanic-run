@@ -10,6 +10,23 @@ const projectPath = (...parts: readonly string[]): string => (
   resolve(process.cwd(), ...parts)
 );
 
+const PUBLIC_FINGERPRINT_FILES = Object.freeze([
+  'manifest.webmanifest',
+  'favicon.png',
+  'icons/sanic-192.png',
+  'icons/sanic-512.png',
+  'icons/sanic-maskable-512.png',
+  'models/sanic-runner.glb',
+  'models/sanic-spin-ball.glb',
+  'models/sanic-ring.glb',
+  'models/forest-kit.glb',
+  'media/sanic-game-promo.png',
+  'media/sanic-score-card-bg.png',
+  'music/ringwood-rush.mp3',
+  'music/liquidity-loop.mp3',
+  'music/ansem-after-dark.mp3',
+]);
+
 const readApplicationJavaScript = (outDir: string): string => {
   const html = readFileSync(projectPath(outDir, 'index.html'), 'utf8');
   const source = html.match(/<script[^>]+src="([^"]+\.js)"/)?.[1];
@@ -39,7 +56,7 @@ const buildFingerprintFiles = (outDir: string): readonly ServiceWorkerBuildFile[
     fileName: `assets/${filename}`,
     contents: readFileSync(resolve(assetsPath, filename)),
   }));
-  for (const filename of ['index.html', 'manifest.webmanifest', 'favicon.png']) {
+  for (const filename of ['index.html', ...PUBLIC_FINGERPRINT_FILES]) {
     bundleFiles.push({
       fileName: filename,
       contents: readFileSync(projectPath(outDir, filename)),
