@@ -84,13 +84,26 @@ const ALL_TEMPLATES = Object.freeze([
 ] as const);
 
 const START_DISTANCE = 24;
+const WEAVE_LANE_CHANGE_SECONDS = 0.29;
 
 const speedAtDistance = (distance: number): number => (
   Math.min(GAME.maxSpeed, GAME.startSpeed + distance / 140)
 );
 
+const weaveHalfSpanAtDistance = (distance: number): number => (
+  speedAtDistance(distance) * WEAVE_LANE_CHANGE_SECONDS
+);
+
 const spacingAtDistance = (distance: number): number => (
   12 + speedAtDistance(distance) * 0.32
+);
+
+const isFullBlockerTemplate = (template: SpawnTemplate): boolean => (
+  new Set(
+    template.obstacles
+      .filter((obstacle) => !obstacle.jumpable)
+      .map((obstacle) => obstacle.lane),
+  ).size === GAME.lanes.length - 1
 );
 
 export class SpawnDirector {
@@ -98,6 +111,7 @@ export class SpawnDirector {
   private rows: SpawnRow[] = [];
   private nextDistance = START_DISTANCE;
   private rowCounter = 0;
+  private previousFullBlockerLane: Lane | null = null;
 
   constructor(seed: number) {
     this.random = new XorShift32(seed);
@@ -108,6 +122,7 @@ export class SpawnDirector {
     this.rows = [];
     this.nextDistance = START_DISTANCE;
     this.rowCounter = 0;
+    this.previousFullBlockerLane = null;
   }
 
   takeUntil(maxDistance: number): readonly SpawnRow[] {
@@ -124,7 +139,13 @@ export class SpawnDirector {
 
   private createRow(distance: number): SpawnRow {
     const template = this.chooseTemplate(distance);
-    const focusLane = this.random.pick(GAME.lanes);
+    const proposedFocusLane = this.random.pick(GAME.lanes);
+    const fullBlocker = isFullBlockerTemplate(template);
+    const focusLane = fullBlocker
+      && this.previousFullBlockerLane !== null
+      && Math.abs(proposedFocusLane - this.previousFullBlockerLane) > 1
+      ? 0
+      : proposedFocusLane;
     const lanes = Object.freeze([
       focusLane,
       ...GAME.lanes.filter((lane) => lane !== focusLane),
@@ -136,7 +157,9 @@ export class SpawnDirector {
       id: `row-${rowIndex}-coin-${itemCounter++}`,
       lane: lanes[coin.lane]!,
       height: coin.height,
-      offset: coin.offset,
+      offset: template === LANE_WEAVE_COIN_LINE && coin.offset !== 0
+        ? Math.sign(coin.offset) * weaveHalfSpanAtDistance(distance)
+        : coin.offset,
     })));
     const obstacles = Object.freeze(template.obstacles.map((obstacle): ObstacleSpawn => Object.freeze({
       id: `row-${rowIndex}-obstacle-${itemCounter++}`,
@@ -146,6 +169,7 @@ export class SpawnDirector {
     })));
 
     this.rowCounter += 1;
+    this.previousFullBlockerLane = fullBlocker ? focusLane : null;
     return Object.freeze({
       id: `row-${rowIndex}`,
       at: distance,
