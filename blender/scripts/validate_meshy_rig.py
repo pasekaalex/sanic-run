@@ -270,8 +270,14 @@ def validate_common(mode: str) -> dict[str, object]:
 
     rig_version = int(rig.get("sanic_rig_version", 1))
     expected_ranges = (
-        EXPECTED_ACTION_RANGES_V2 if rig_version >= 2 else EXPECTED_ACTION_RANGES
+        EXPECTED_ACTION_RANGES_V2
+        if rig_version in {2, 3}
+        else EXPECTED_ACTION_RANGES
     )
+    if rig_version == 3:
+        assert rig.get("sanic_run_variant") == "v3-run", (
+            "SANIC rig version 3 must use sanic_run_variant='v3-run'"
+        )
     ranges = action_ranges()
     assert ranges == expected_ranges, (
         f"Action ranges differ: expected {expected_ranges}, got {ranges}"

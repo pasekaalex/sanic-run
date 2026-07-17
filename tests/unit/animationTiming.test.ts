@@ -35,7 +35,7 @@ describe('animationTiming', () => {
   });
 
   it('crossfades into Jump before the short anticipation finishes', () => {
-    expect(animationCrossfadeSeconds('Jump')).toBeLessThanOrEqual(0.04);
+    expect(animationCrossfadeSeconds('Jump')).toBe(0.035);
     expect(animationCrossfadeSeconds('Crash')).toBe(0.08);
     expect(animationCrossfadeSeconds('Run')).toBeGreaterThan(0.08);
   });

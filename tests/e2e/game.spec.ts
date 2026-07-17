@@ -717,6 +717,161 @@ test('keeps 390px HUD controls clear of every metric tile', async ({ page }) => 
   expect(soundControl.width).toBeGreaterThanOrEqual(86);
 });
 
+test('crossfades the v3 sprint into jump without a pose snap', async ({ page }, testInfo) => {
+  await beginRun(page);
+  const canvas = page.locator('#game-canvas');
+  await expect(canvas).toHaveAttribute('data-character-asset', 'glb');
+  await expect.poll(() => canvas.evaluate((element) => ({
+    action: element.dataset.characterAction ?? null,
+    poseProbePresent: element.dataset.poseProbe !== undefined,
+  }))).toEqual({
+    action: 'Run',
+    poseProbePresent: true,
+  });
+
+  const samples = await page.evaluate(() => new Promise<{
+    readonly at: number;
+    readonly action: string;
+    readonly presentation: string;
+    readonly pose: number[];
+  }[]>((resolve, reject) => {
+    const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
+    if (canvas === null) {
+      reject(new Error('Missing game canvas'));
+      return;
+    }
+
+    const captured: {
+      readonly at: number;
+      readonly action: string;
+      readonly presentation: string;
+      readonly pose: number[];
+    }[] = [];
+    let animationFrame = 0;
+    let runFramesBeforeJump = 0;
+    let jumpDispatched = false;
+    let sawJump = false;
+    let sawSpin = false;
+
+    const timeout = window.setTimeout(() => {
+      window.cancelAnimationFrame(animationFrame);
+      reject(new Error(
+        `Run-to-Jump probe timed out: actions=${captured.map(({ action }) => action).join(',')}`,
+      ));
+    }, 5_000);
+
+    const fail = (message: string): void => {
+      window.clearTimeout(timeout);
+      window.cancelAnimationFrame(animationFrame);
+      reject(new Error(message));
+    };
+
+    const sample = (timestamp: number): void => {
+      const action = canvas.dataset.characterAction;
+      const rawPose = canvas.dataset.poseProbe;
+      if (action === undefined || rawPose === undefined) {
+        fail('Missing data-character-action or data-pose-probe');
+        return;
+      }
+      const pose = rawPose.split(',').map(Number);
+      if (pose.length !== 9 || pose.some((value) => !Number.isFinite(value))) {
+        fail(`Invalid data-pose-probe: ${rawPose}`);
+        return;
+      }
+
+      const presentation = canvas.dataset.presentation ?? '';
+      captured.push({ at: timestamp, action, presentation, pose });
+
+      if (!jumpDispatched) {
+        if (action !== 'Run') {
+          fail(`Expected Run before jump, got ${action}`);
+          return;
+        }
+        runFramesBeforeJump += 1;
+        if (runFramesBeforeJump >= 2) {
+          jumpDispatched = true;
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space' }));
+        }
+      } else {
+        if (action === 'Jump') sawJump = true;
+        if (presentation === 'spin') sawSpin = true;
+        if (sawJump && action === 'Run') {
+          if (!sawSpin) {
+            fail('Jump never reached spin presentation');
+            return;
+          }
+          if (presentation !== 'character') {
+            fail(`Landing presentation remained ${presentation}`);
+            return;
+          }
+          window.clearTimeout(timeout);
+          resolve(captured);
+          return;
+        }
+      }
+
+      animationFrame = window.requestAnimationFrame(sample);
+    };
+
+    animationFrame = window.requestAnimationFrame(sample);
+  }));
+
+  const actionSequence = samples
+    .map(({ action }) => action)
+    .filter((action, index, actions) => index === 0 || action !== actions[index - 1]);
+  expect(actionSequence).toEqual(['Run', 'Jump', 'Run']);
+  expect(samples.some(({ presentation }) => presentation === 'spin')).toBe(true);
+  expect(samples.at(-1)?.presentation).toBe('character');
+
+  const labels = [
+    'rootY',
+    'rootZ',
+    'chestY',
+    'chestZ',
+    'leftFootY',
+    'leftFootZ',
+    'rightFootY',
+    'rightFootZ',
+    'bodyLeanDegrees',
+  ] as const;
+  const limits = [0.080, 0.080, 0.100, 0.120, 0.180, 0.220, 0.180, 0.220, 12] as const;
+  const maxima = labels.map(() => 0);
+  const sampledTransitions = new Set<string>();
+  let adjacentPairs = 0;
+
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1]!;
+    const current = samples[index]!;
+    if (current.at - previous.at > 80) continue;
+    adjacentPairs += 1;
+    sampledTransitions.add(`${previous.action}->${current.action}`);
+    for (let valueIndex = 0; valueIndex < labels.length; valueIndex += 1) {
+      maxima[valueIndex] = Math.max(
+        maxima[valueIndex]!,
+        Math.abs(current.pose[valueIndex]! - previous.pose[valueIndex]!),
+      );
+    }
+  }
+
+  expect(adjacentPairs).toBeGreaterThan(0);
+  expect(sampledTransitions).toContain('Run->Jump');
+  expect(sampledTransitions).toContain('Jump->Run');
+  for (let index = 0; index < labels.length; index += 1) {
+    expect(maxima[index], labels[index]).toBeLessThanOrEqual(limits[index]!);
+  }
+
+  const maximumAdjacentDeltas = Object.fromEntries(
+    labels.map((label, index) => [label, maxima[index]]),
+  );
+  console.info(
+    `SANIC_POSE_MAXIMA=${JSON.stringify({
+      project: testInfo.project.name,
+      samples: samples.length,
+      maximumAdjacentDeltas,
+    })}`,
+  );
+});
+
 test('starts, responds to controls, pauses, crashes, and restarts', async ({ page }) => {
   await beginRun(page);
   await page.getByRole('button', { name: 'Mute sound' }).click();
