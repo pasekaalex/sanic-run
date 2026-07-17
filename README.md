@@ -8,6 +8,15 @@ Playable Three.js coin runner for `$SANIC`.
 - Pump.fun: https://pump.fun/coin/CMNDT7PK5gHY8ZknhzEC2Q7UMDs2b7LT6c1eX7Kepump
 - Contract: `CMNDT7PK5gHY8ZknhzEC2Q7UMDs2b7LT6c1eX7Kepump`
 
+## Game
+
+- Three progressively faster stages: Ringwood Rush, Liquidity Loop, and Ansem After Dark
+- Deterministic three-lane obstacles, ring chains, mobile swipe/tap controls, and keyboard controls
+- Rigged v3 runner with sprint, jump, crash, and spin-ball animation states
+- Three original chiptune tracks with zone-aware 1.2-second equal-power crossfades
+- Installable PWA with an offline-safe app shell and warmed game assets after the first successful load
+- Click-to-copy contract address, X link, and generated shareable score cards
+
 ## Local development
 
 ```bash
@@ -15,6 +24,7 @@ npm ci
 npm run dev
 npm test
 npm run build
+npm run test:pwa:artifacts
 npx playwright test
 ```
 
@@ -36,6 +46,12 @@ blender --background blender/world-source.blend --python blender/scripts/validat
 ```
 
 Web exports live in `public/models/`. Launch art is `public/media/sanic-game-promo.png`; the generated social card is `public/media/sanic-og.jpg`; the runtime score-card background is `public/media/sanic-score-card-bg.png`.
+
+Original zone music is rendered reproducibly by `scripts/render-zone-music.mjs`. Validate the committed tracks with:
+
+```bash
+node scripts/render-zone-music.mjs --validate
+```
 
 ## Deployment
 
