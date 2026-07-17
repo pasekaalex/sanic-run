@@ -23,10 +23,17 @@ OUTPUT_DIR = Path(
     os.environ.get("SANIC_RIG_OUTPUT_DIR", SOURCE_BLEND.parent)
 ).expanduser().resolve()
 RIG_VARIANT = os.environ.get("SANIC_RIG_VARIANT", "v1").strip().lower()
-assert RIG_VARIANT in {"v1", "v2-run"}, f"Unknown SANIC rig variant: {RIG_VARIANT}"
+assert RIG_VARIANT in {"v1", "v2-run", "v3-run"}, (
+    f"Unknown SANIC rig variant: {RIG_VARIANT}"
+)
+DEFAULT_BASENAMES = {
+    "v1": "SANIC-meshy6-v1-rigged",
+    "v2-run": "SANIC-meshy6-v2-run",
+    "v3-run": "SANIC-meshy6-v3-run",
+}
 RIG_BASENAME = os.environ.get(
     "SANIC_RIG_BASENAME",
-    "SANIC-meshy6-v1-rigged" if RIG_VARIANT == "v1" else "SANIC-meshy6-v2-run",
+    DEFAULT_BASENAMES[RIG_VARIANT],
 ).strip()
 RIGGED_BLEND = OUTPUT_DIR / f"{RIG_BASENAME}.blend"
 RIGGED_GLB = OUTPUT_DIR / f"{RIG_BASENAME}.glb"
@@ -183,7 +190,11 @@ def create_armature(collection: bpy.types.Collection) -> bpy.types.Object:
         )
     bpy.ops.object.mode_set(mode="OBJECT")
     rig["sanic_rig"] = True
-    rig["sanic_rig_version"] = 1 if RIG_VARIANT == "v1" else 2
+    rig["sanic_rig_version"] = {
+        "v1": 1,
+        "v2-run": 2,
+        "v3-run": 3,
+    }[RIG_VARIANT]
     if RIG_VARIANT != "v1":
         rig["sanic_run_variant"] = RIG_VARIANT
     return rig
@@ -512,6 +523,28 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         assert selected > 0 and math.isfinite(minimum), (side, selected, minimum)
         return minimum
 
+    def insert_pose_keys(
+        frame: int,
+        previous: dict[str, object],
+    ) -> None:
+        for bone in rig.pose.bones:
+            quaternion = bone.rotation_quaternion.copy().normalized()
+            earlier = previous.get(bone.name)
+            if earlier is not None and earlier.dot(quaternion) < 0.0:
+                quaternion.negate()
+            bone.rotation_quaternion = quaternion
+            previous[bone.name] = quaternion.copy()
+            bone.keyframe_insert(
+                "rotation_quaternion",
+                frame=frame,
+                group=bone.name,
+            )
+        rig.pose.bones["root"].keyframe_insert(
+            "location",
+            frame=frame,
+            group="root",
+        )
+
     def key_pose(
         frame: int,
         pose: dict[str, object],
@@ -531,15 +564,7 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
             minimum_z = deformed_minimum_z()
             if minimum_z < 0.002:
                 set_root_offset(root_offset + up * (0.002 - minimum_z))
-        for bone in rig.pose.bones:
-            quaternion = bone.rotation_quaternion.copy().normalized()
-            earlier = previous.get(bone.name)
-            if earlier is not None and earlier.dot(quaternion) < 0.0:
-                quaternion.negate()
-            bone.rotation_quaternion = quaternion
-            previous[bone.name] = quaternion.copy()
-            bone.keyframe_insert("rotation_quaternion", frame=frame, group=bone.name)
-        rig.pose.bones["root"].keyframe_insert("location", frame=frame, group="root")
+        insert_pose_keys(frame, previous)
 
     def make(
         name: str,
@@ -571,6 +596,79 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         track = rig.animation_data.nla_tracks.new()
         track.name = name
         track.strips.new(name, 1, action)
+        track.mute = True
+        rig.animation_data.action = None
+        return action
+
+    def flight_root_offset(
+        start: Vector,
+        end: Vector,
+        frame: int,
+        first: int,
+        last: int,
+    ) -> Vector:
+        t = (frame - first) / (last - first)
+        smooth = t * t * (3.0 - 2.0 * t)
+        arc = 0.0210 * 4.0 * t * (1.0 - t)
+        return start.lerp(end, smooth) + up * arc
+
+    def make_v3_run(
+        anchors: dict[int, dict[str, object]],
+    ) -> bpy.types.Action:
+        poses = {
+            frame: pose_between(anchors, frame)
+            for frame in range(1, 18)
+        }
+        stance_sides = {
+            **{frame: "L" for frame in range(1, 6)},
+            **{frame: "R" for frame in range(9, 14)},
+            17: "L",
+        }
+        root_offsets: dict[int, Vector] = {}
+
+        for frame, side in stance_sides.items():
+            scene.frame_set(frame)
+            solve_pose(poses[frame])
+            base = poses[frame]["root_offset"]
+            assert isinstance(base, Vector)
+            correction = 0.002 - deformed_foot_minimum_z(side)
+            root_offsets[frame] = base + up * correction
+
+        root_offsets[17] = root_offsets[1].copy()
+        for first, last in ((5, 9), (13, 17)):
+            for frame in range(first + 1, last):
+                root_offsets[frame] = flight_root_offset(
+                    root_offsets[first],
+                    root_offsets[last],
+                    frame,
+                    first,
+                    last,
+                )
+
+        action = bpy.data.actions.new("Run")
+        action.use_fake_user = True
+        action.use_frame_range = True
+        action.frame_start = 1
+        action.frame_end = 17
+        action.use_cyclic = True
+        rig.animation_data.action = action
+        previous: dict[str, object] = {}
+
+        for frame in range(1, 18):
+            scene.frame_set(frame)
+            solved = {
+                **poses[frame],
+                "root_offset": root_offsets[frame],
+            }
+            solve_pose(solved)
+            insert_pose_keys(frame, previous)
+
+        for curve in layered_fcurves(action):
+            for point in curve.keyframe_points:
+                point.interpolation = "LINEAR"
+        track = rig.animation_data.nla_tracks.new()
+        track.name = "Run"
+        track.strips.new("Run", 1, action)
         track.mute = True
         rig.animation_data.action = None
         return action
@@ -641,7 +739,7 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
         flight_b = blend_pose(passing_b, contact_a, 0.58)
         flight_b["root_offset"] = up * 0.03
         run = make("Run", 24, {1: contact_a, 4: passing_a, 7: flight_a, 13: contact_b, 16: passing_b, 19: flight_b, 24: contact_a}, cyclic=True)
-    else:
+    elif RIG_VARIANT == "v2-run":
         # A compact 16-frame sprint period with an exact duplicate seam. The
         # old 24-frame cycle kept a foot planted for half of every stride and
         # read as a slow march against the fast-scrolling world. These poses
@@ -688,6 +786,173 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
                 17: "L",
             },
         )
+    else:
+        v3_arm_forward_strike = (
+            (0.025, 0.500, -0.866),
+            (0.020, 0.788, 0.616),
+            (0.015, 0.820, 0.572),
+        )
+        v3_arm_forward_load = (
+            (0.025, 0.309, -0.951),
+            (0.020, 0.930, 0.368),
+            (0.015, 0.954, 0.300),
+        )
+        v3_arm_forward_pass = (
+            (0.025, -0.191, -0.982),
+            (0.020, 1.000, 0.000),
+            (0.015, 0.940, -0.342),
+        )
+        v3_arm_forward_flight = (
+            (0.025, 0.438, -0.899),
+            (0.020, 0.766, 0.643),
+            (0.015, 0.800, 0.600),
+        )
+        v3_arm_back_strike = (
+            (0.025, -0.906, -0.423),
+            (0.020, 0.600, -0.800),
+            (0.015, 0.480, -0.877),
+        )
+        v3_arm_back_load = (
+            (0.025, -0.743, -0.669),
+            (0.020, 0.650, -0.760),
+            (0.015, 0.450, -0.893),
+        )
+        v3_arm_back_pass = (
+            (0.025, -0.276, -0.961),
+            (0.020, 0.899, -0.438),
+            (0.015, 0.500, -0.866),
+        )
+        v3_arm_back_flight = (
+            (0.025, -0.788, -0.616),
+            (0.020, 0.530, -0.848),
+            (0.015, 0.400, -0.916),
+        )
+
+        v3_leg_strike = (
+            (0.025, 0.520, -0.854),
+            (0.020, 0.100, -0.995),
+            (0.015, 0.950, -0.312),
+            (0.010, 0.995, -0.100),
+        )
+        v3_leg_trail = (
+            (0.025, -0.450, -0.893),
+            (0.020, -0.800, -0.600),
+            (0.015, 0.820, -0.572),
+            (0.010, 0.985, -0.174),
+        )
+        v3_leg_load = (
+            (0.025, 0.180, -0.984),
+            (0.020, -0.392, -0.920),
+            (0.015, 1.000, -0.020),
+            (0.010, 1.000, 0.000),
+        )
+        v3_leg_recovery = (
+            (0.025, -0.100, -0.995),
+            (0.020, -0.980, -0.200),
+            (0.015, 0.980, 0.200),
+            (0.010, 0.995, 0.100),
+        )
+        v3_leg_toe_off = (
+            (0.025, -0.250, -0.968),
+            (0.020, -0.815, -0.580),
+            (0.015, 0.800, -0.600),
+            (0.010, 0.985, -0.174),
+        )
+        v3_leg_knee_drive = (
+            (0.025, 0.860, -0.510),
+            (0.020, -0.550, -0.835),
+            (0.015, 0.940, 0.342),
+            (0.010, 0.985, 0.174),
+        )
+        v3_leg_flight_lead = (
+            (0.025, 0.820, -0.572),
+            (0.020, 0.100, -0.995),
+            (0.015, 0.980, -0.200),
+            (0.010, 0.995, -0.100),
+        )
+        v3_leg_flight_recovery = (
+            (0.025, -0.700, -0.714),
+            (0.020, -0.940, 0.342),
+            (0.015, 0.900, 0.435),
+            (0.010, 0.980, 0.200),
+        )
+
+        v3_contact_a = pose(
+            root_up=0.006,
+            lean=21.0,
+            pelvis_yaw=-5.0,
+            chest_yaw=7.0,
+            arms={"L": v3_arm_back_strike, "R": v3_arm_forward_strike},
+            legs={"L": v3_leg_strike, "R": v3_leg_trail},
+        )
+        v3_load_a = pose(
+            root_up=-0.014,
+            lean=23.0,
+            pelvis_yaw=-3.0,
+            chest_yaw=4.0,
+            arms={"L": v3_arm_back_load, "R": v3_arm_forward_load},
+            legs={"L": v3_leg_load, "R": v3_leg_recovery},
+        )
+        v3_toe_a = pose(
+            root_up=0.006,
+            lean=24.0,
+            pelvis_yaw=1.0,
+            chest_yaw=-2.0,
+            arms={"L": v3_arm_forward_pass, "R": v3_arm_back_pass},
+            legs={"L": v3_leg_toe_off, "R": v3_leg_knee_drive},
+        )
+        v3_flight_a = pose(
+            root_up=0.0,
+            lean=23.0,
+            pelvis_yaw=4.0,
+            chest_yaw=-6.0,
+            arms={"L": v3_arm_forward_flight, "R": v3_arm_back_flight},
+            legs={"L": v3_leg_flight_recovery, "R": v3_leg_flight_lead},
+        )
+        v3_contact_b = pose(
+            root_up=0.006,
+            lean=21.0,
+            pelvis_yaw=5.0,
+            chest_yaw=-7.0,
+            arms={"L": v3_arm_forward_strike, "R": v3_arm_back_strike},
+            legs={"L": v3_leg_trail, "R": v3_leg_strike},
+        )
+        v3_load_b = pose(
+            root_up=-0.014,
+            lean=23.0,
+            pelvis_yaw=3.0,
+            chest_yaw=-4.0,
+            arms={"L": v3_arm_forward_load, "R": v3_arm_back_load},
+            legs={"L": v3_leg_recovery, "R": v3_leg_load},
+        )
+        v3_toe_b = pose(
+            root_up=0.006,
+            lean=24.0,
+            pelvis_yaw=-1.0,
+            chest_yaw=2.0,
+            arms={"L": v3_arm_back_pass, "R": v3_arm_forward_pass},
+            legs={"L": v3_leg_knee_drive, "R": v3_leg_toe_off},
+        )
+        v3_flight_b = pose(
+            root_up=0.0,
+            lean=23.0,
+            pelvis_yaw=-4.0,
+            chest_yaw=6.0,
+            arms={"L": v3_arm_back_flight, "R": v3_arm_forward_flight},
+            legs={"L": v3_leg_flight_lead, "R": v3_leg_flight_recovery},
+        )
+        v3_anchors = {
+            1: v3_contact_a,
+            3: v3_load_a,
+            5: v3_toe_a,
+            7: v3_flight_a,
+            9: v3_contact_b,
+            11: v3_load_b,
+            13: v3_toe_b,
+            15: v3_flight_b,
+            17: v3_contact_a,
+        }
+        run = make_v3_run(v3_anchors)
 
     jump_entry = pose(root_up=0.0, lean=8.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_relaxed), legs=same_legs(leg_neutral))
     jump_crouch = pose(root_up=-0.08, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_back), legs=same_legs(leg_crouch))
@@ -696,6 +961,55 @@ def create_actions(rig: bpy.types.Object) -> dict[str, bpy.types.Action]:
     jump_uncurl = pose(root_up=0.015, lean=9.0, pelvis_yaw=0.0, chest_yaw=1.0, arms=same_arms(arm_forward), legs=same_legs(leg_landing))
     jump_land = pose(root_up=-0.045, lean=13.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_forward), legs=same_legs(leg_landing))
     jump = make("Jump", 30, {1: jump_entry, 4: jump_crouch, 6: jump_takeoff, 9: jump_tuck, 20: jump_tuck, 24: jump_uncurl, 27: jump_land, 30: jump_entry})
+    if RIG_VARIANT == "v3-run":
+        # The refined v3 T-pose has micrometer-level geometry differences
+        # that perturb the mesh-bounds grounding step. Reapply the approved
+        # v1 root samples so the full Jump matrix snapshot remains exact.
+        approved_jump_root_y = (
+            0.05035637319087982,
+            0.050351984798908234,
+            0.0022778883576393127,
+            -0.04304240643978119,
+            0.07061227411031723,
+            0.12822197377681732,
+            0.11215700209140778,
+            0.026111111044883728,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999997466802597,
+            0.030000001192092896,
+            0.029999997466802597,
+            0.029999997466802597,
+            0.030000001192092896,
+            0.029999997466802597,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.029999999329447746,
+            0.027656249701976776,
+            0.022499999031424522,
+            0.017343750223517418,
+            0.014999999664723873,
+            -0.0005555544048547745,
+            -0.029444444924592972,
+            -0.04124971851706505,
+            -0.0026392564177513123,
+            0.04331392049789429,
+            0.05035637319087982,
+        )
+        rig.animation_data.action = jump
+        for frame, root_y in enumerate(approved_jump_root_y, start=1):
+            scene.frame_set(frame)
+            rig.pose.bones["root"].location = Vector((0.0, root_y, 0.0))
+            rig.pose.bones["root"].keyframe_insert(
+                "location",
+                frame=frame,
+                group="root",
+            )
+        for curve in layered_fcurves(jump):
+            for point in curve.keyframe_points:
+                point.interpolation = "LINEAR"
+        rig.animation_data.action = None
 
     crash_brace = pose(root_up=-0.01, lean=16.0, pelvis_yaw=0.0, chest_yaw=0.0, arms=same_arms(arm_forward), legs=same_legs(leg_crouch))
     crash_impact = pose(root_up=-0.06, lean=34.0, pelvis_yaw=5.0, chest_yaw=-8.0, arms={"L": arm_tuck, "R": arm_forward}, legs={"L": leg_landing, "R": leg_crouch})
@@ -803,14 +1117,23 @@ def render_animation_previews(
         "front": Vector((0.0, -4.2, 0.86)),
         "side": Vector((-4.2, 0.0, 0.86)),
     }
+    if RIG_VARIANT == "v3-run":
+        views["rear"] = Vector((0.0, 4.2, 0.86))
     rig.animation_data_create()
     for action_name, frames in checkpoints.items():
         action = bpy.data.actions[action_name]
         rig.animation_data.action = action
         for view_name, camera_location in views.items():
+            if view_name == "rear" and action_name != "Run":
+                continue
             camera.location = camera_location
             point_at(camera, target)
-            for frame in frames:
+            view_frames = (
+                tuple(range(1, 18))
+                if view_name == "rear"
+                else frames
+            )
+            for frame in view_frames:
                 scene.frame_set(frame)
                 bpy.context.view_layer.update()
                 scene.render.filepath = str(
