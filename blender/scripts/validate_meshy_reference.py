@@ -121,17 +121,43 @@ def mesh_centroid(obj: bpy.types.Object) -> Vector:
     ) / len(obj.data.vertices)
 
 
-def image_dimensions() -> dict[str, tuple[int, int]]:
-    packed = {
-        image.name: (int(image.size[0]), int(image.size[1]))
-        for image in bpy.data.images
-        if image.packed_file is not None
-    }
-    assert packed, "Meshy reference contains no packed texture images"
-    for name, dimensions in packed.items():
-        assert max(dimensions) <= MAX_IMAGE_DIMENSION, (
-            f"Packed image {name} exceeds {MAX_IMAGE_DIMENSION}px: {dimensions}"
+def referenced_images(
+    objects: list[bpy.types.Object],
+) -> list[bpy.types.Image]:
+    images: list[bpy.types.Image] = []
+    seen: set[int] = set()
+    for obj in objects:
+        for material_slot in obj.material_slots:
+            material = material_slot.material
+            if material is None or material.node_tree is None:
+                continue
+            for node in material.node_tree.nodes:
+                if node.type != "TEX_IMAGE" or node.image is None:
+                    continue
+                identity = id(node.image)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                images.append(node.image)
+    return images
+
+
+def image_dimensions(
+    objects: list[bpy.types.Object] | None = None,
+) -> dict[str, tuple[int, int]]:
+    images = referenced_images(visible_meshes() if objects is None else objects)
+    assert images, "Meshy reference contains no visible textured mesh objects"
+    packed: dict[str, tuple[int, int]] = {}
+    for image in images:
+        assert image.packed_file is not None, (
+            f"Referenced image {image.name} must be embedded/packed"
         )
+        dimensions = (int(image.size[0]), int(image.size[1]))
+        assert max(dimensions) <= MAX_IMAGE_DIMENSION, (
+            f"Referenced image {image.name} exceeds "
+            f"{MAX_IMAGE_DIMENSION}px: {dimensions}"
+        )
+        packed[image.name] = dimensions
     return packed
 
 
@@ -145,9 +171,8 @@ def validate(path: Path) -> dict[str, object]:
     )
 
     meshes = visible_meshes()
-    textured = textured_meshes(meshes)
     assert meshes, "Meshy reference contains no visible mesh objects"
-    assert textured, "Meshy reference contains no visible textured mesh objects"
+    images = image_dimensions(meshes)
 
     triangles = evaluated_triangle_count(meshes)
     assert triangles < MAX_TRIANGLES, (
@@ -190,7 +215,6 @@ def validate(path: Path) -> dict[str, object]:
             f"{left.y:.6f}, {right.y:.6f}"
         )
 
-    images = image_dimensions()
     return {
         "bytes": path.stat().st_size,
         "triangles": triangles,

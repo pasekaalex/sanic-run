@@ -26,7 +26,9 @@ from pathlib import Path
 
 
 API_BASE = "https://api.meshy.ai/openapi/v1"
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REFERENCE_ROOT = Path(
+    "/home/alex/Downloads/SANIC-Meshy-v3/meshy-reference"
+).resolve()
 RIG_REQUIRED_BALANCE = 8
 ANIMATION_REQUIRED_BALANCE = 3
 TERMINAL_FAILURE_STATUSES = {"FAILED", "CANCELED"}
@@ -89,20 +91,21 @@ def read_api_key(environ: Mapping[str, str] | None = None) -> str:
     return value.strip()
 
 
-def _outside_repository(path: Path, description: str) -> Path:
+def _reference_path(path: Path, description: str) -> Path:
+    reference_root = REFERENCE_ROOT.expanduser().resolve()
     expanded = path.expanduser()
     absolute = Path(os.path.abspath(expanded))
     resolved = absolute.resolve()
-    if (
-        absolute.is_relative_to(REPOSITORY_ROOT)
-        or resolved.is_relative_to(REPOSITORY_ROOT)
+    if not (
+        absolute.is_relative_to(reference_root)
+        and resolved.is_relative_to(reference_root)
     ):
-        raise RuntimeError(f"{description} must stay outside the repository")
+        raise RuntimeError(f"{description} must stay under the reference root")
     return resolved
 
 
 def _state_path(path: Path) -> Path:
-    return _outside_repository(path, "Meshy state JSON")
+    return _reference_path(path, "Meshy state JSON")
 
 
 @contextmanager
@@ -136,9 +139,14 @@ def _load_state(path: Path, *, allow_missing: bool = False) -> dict[str, object]
         if allow_missing:
             return {}
         raise RuntimeError("Meshy state JSON does not exist")
-    if path.is_symlink() or not path.is_file():
+    if path.is_symlink():
         raise RuntimeError("Meshy state JSON must be a regular file")
-    if stat.S_IMODE(path.stat().st_mode) != 0o600:
+    metadata = path.stat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError("Meshy state JSON must be a regular file")
+    if metadata.st_nlink != 1:
+        raise RuntimeError("Meshy state JSON must not have hard-link aliases")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
         raise RuntimeError("Meshy state JSON permissions must be 0600")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -179,6 +187,17 @@ def _assert_safe_state(value: object, *, key: str = "") -> None:
             raise RuntimeError("Refusing to persist sensitive Meshy state")
 
 
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_write_state(path: Path, state: dict[str, object]) -> None:
     _assert_safe_state(state)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,6 +217,7 @@ def _atomic_write_state(path: Path, state: dict[str, object]) -> None:
             os.fsync(output.fileno())
         os.replace(temporary_path, path)
         path.chmod(0o600)
+        _fsync_directory(path.parent)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -371,7 +391,7 @@ def rig(
     state_json: Path,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    input_path = input_glb.expanduser().resolve()
+    input_path = _reference_path(input_glb, "Rig input GLB")
     if not input_path.is_file() or input_path.suffix.lower() != ".glb":
         raise RuntimeError("Rig input must be an existing GLB")
     state_path = _state_path(state_json)
@@ -553,7 +573,7 @@ def poll_rig(
         task="rig",
         endpoint="rigging",
         state_path=_state_path(state_json),
-        output_dir=_outside_repository(output_dir, "Meshy output directory"),
+        output_dir=_reference_path(output_dir, "Meshy output directory"),
         task_id_field="rig_task_id",
         status_field="rig_status",
         progress_field="rig_progress",
@@ -632,7 +652,7 @@ def poll_animation(
         task="animation",
         endpoint="animations",
         state_path=_state_path(state_json),
-        output_dir=_outside_repository(output_dir, "Meshy output directory"),
+        output_dir=_reference_path(output_dir, "Meshy output directory"),
         task_id_field="animation_task_id",
         status_field="animation_status",
         progress_field="animation_progress",
@@ -681,6 +701,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             raise RuntimeError("Unknown Meshy guard command")
+    except OSError:
+        print(
+            f"task={arguments.command} error=local filesystem operation failed",
+            file=sys.stderr,
+        )
+        return 1
     except RuntimeError as error:
         message = _safe_error_message(str(error)) or "Meshy command failed"
         print(f"task={arguments.command} error={message}", file=sys.stderr)

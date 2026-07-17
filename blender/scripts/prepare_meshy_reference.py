@@ -8,12 +8,14 @@ Usage::
 
     blender --background --factory-startup --python-exit-code 1 \
       --python blender/scripts/prepare_meshy_reference.py -- \
-      /path/to/corrected.blend /outside/the/repository/meshy-input.glb
+      /path/to/corrected.blend \
+      /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/meshy-input.glb
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,7 +26,9 @@ from mathutils import Vector
 EXPORT_COLLECTION = "SANIC_CHARACTER_EXPORT"
 EXCLUDED_COLLECTIONS = ("SANIC_RAW_PRIVATE", "SANIC_SPIN_EXPORT")
 MAX_IMAGE_DIMENSION = 1_024
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REFERENCE_ROOT = Path(
+    "/home/alex/Downloads/SANIC-Meshy-v3/meshy-reference"
+).resolve()
 
 
 def arguments_after_separator() -> list[str]:
@@ -32,8 +36,15 @@ def arguments_after_separator() -> list[str]:
 
 
 def assert_outside_repository(output_path: Path) -> None:
-    assert not output_path.is_relative_to(REPOSITORY_ROOT), (
-        f"Meshy reference output must stay outside the repository: {output_path}"
+    reference_root = REFERENCE_ROOT.expanduser().resolve()
+    absolute = Path(os.path.abspath(output_path.expanduser()))
+    resolved = absolute.resolve()
+    assert (
+        absolute.is_relative_to(reference_root)
+        and resolved.is_relative_to(reference_root)
+    ), (
+        "Meshy reference output must stay under the reference root: "
+        f"{output_path}"
     )
 
 
@@ -207,13 +218,13 @@ def main() -> None:
         "Expected exactly SOURCE_BLEND and OUTPUT_GLB arguments"
     )
     source_path = Path(arguments[0]).expanduser().resolve()
-    output_path = Path(arguments[1]).expanduser().resolve()
+    output_argument = Path(arguments[1]).expanduser()
+    assert_outside_repository(output_argument)
+    output_path = output_argument.resolve()
     assert output_path.suffix.lower() == ".glb", (
         f"Meshy reference output must be a GLB: {output_path}"
     )
     assert source_path != output_path, "Meshy reference output cannot overwrite its source"
-    assert_outside_repository(output_path)
-
     open_source(source_path)
     export_objects = select_export_meshes()
     images = copy_and_pack_textures(export_objects)
