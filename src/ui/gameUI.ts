@@ -481,9 +481,12 @@ export class GameUI {
 
   private openDialog(dialog: HTMLDialogElement): void {
     const other = dialog === this.pausedDialog ? this.resultsDialog : this.pausedDialog;
+    const isDialogHandoff = other.open;
     this.closeDialog(other);
     if (dialog.open) return;
-    this.focusBeforeDialog = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!isDialogHandoff) {
+      this.focusBeforeDialog = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
     try {
       dialog.showModal();
     } catch {
@@ -521,10 +524,13 @@ export class GameUI {
   }
 
   private closeDialog(dialog: HTMLDialogElement): void {
-    if (dialog.open) dialog.close();
     const compatibility = this.dialogCompatibility;
-    if (compatibility?.dialog !== dialog) return;
+    if (compatibility?.dialog !== dialog) {
+      if (dialog.open) dialog.close();
+      return;
+    }
 
+    dialog.removeAttribute('open');
     dialog.removeEventListener('keydown', this.handleCompatibilityDialogKeyDown);
     for (const { element, inert } of compatibility.background) element.inert = inert;
     this.restoreAttribute(dialog, 'role', compatibility.role);
