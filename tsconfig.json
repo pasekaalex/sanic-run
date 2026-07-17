@@ -12,5 +12,11 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "vite.config.ts"]
+  "include": [
+    "build",
+    "src",
+    "tests",
+    "vite.config.ts",
+    "vitest.artifacts.config.ts"
+  ]
 }

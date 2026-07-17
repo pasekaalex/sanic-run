@@ -38,8 +38,8 @@ const cacheControlFor = (source: string): string | undefined => (
 );
 
 describe('Vercel cache policy', () => {
-  it.each(['/models/(.*)', '/media/(.*)'])(
-    'revalidates stable asset URLs so model and promo replacements reach returning players: %s',
+  it.each(['/models/(.*)', '/media/(.*)', '/music/(.*)', '/icons/(.*)'])(
+    'revalidates stable asset URLs so replacements reach returning players: %s',
     (source) => {
       expect(cacheControlFor(source)).toBe('public, max-age=0, must-revalidate');
     },
@@ -48,6 +48,13 @@ describe('Vercel cache policy', () => {
   it('keeps content-hashed build assets immutable', () => {
     expect(cacheControlFor('/assets/(.*)')).toBe('public, max-age=31536000, immutable');
   });
+
+  it.each(['/sw.js', '/manifest.webmanifest'])(
+    'forces update checks for PWA control files: %s',
+    (source) => {
+      expect(cacheControlFor(source)).toBe('public, max-age=0, must-revalidate');
+    },
+  );
 });
 
 describe('Vercel content security policy', () => {
@@ -73,7 +80,7 @@ describe('Crawler routes', () => {
     expect(robots.split(/\r?\n/).filter(Boolean)).toEqual([
       'User-agent: *',
       'Allow: /',
-      'Sitemap: https://sanic.fun/sitemap.xml',
+      'Sitemap: https://www.sanic.fun/sitemap.xml',
     ]);
   });
 
@@ -81,7 +88,7 @@ describe('Crawler routes', () => {
     const sitemap = new DOMParser().parseFromString(readPublicFile('sitemap.xml'), 'application/xml');
     expect(sitemap.querySelector('parsererror')).toBeNull();
     expect([...sitemap.getElementsByTagName('loc')].map((node) => node.textContent)).toEqual([
-      'https://sanic.fun/',
+      'https://www.sanic.fun/',
     ]);
   });
 

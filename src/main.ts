@@ -5,6 +5,7 @@ import './styles.css';
 import './pixel-ui.css';
 
 import { GameApp } from './app/gameApp';
+import { registerPwaAfterLoad } from './platform/pwa';
 
 const appUi = document.querySelector<HTMLElement>('#app-ui');
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
@@ -14,7 +15,15 @@ if (appUi === null || canvas === null) {
 }
 
 const app = new GameApp(canvas, appUi);
-void app.initialize();
+const initialization = app.initialize();
+
+if (import.meta.env.MODE === 'production') {
+  registerPwaAfterLoad(
+    import.meta.env.MODE,
+    initialization.then(() => appUi.dataset.phase === 'intro'),
+  );
+}
+void initialization;
 
 const handlePageHide = (event: PageTransitionEvent): void => {
   if (!event.persisted) app.destroy();

@@ -1,0 +1,39 @@
+{
+  "id": "https://www.sanic.fun/",
+  "name": "$SANIC — I Love To Go Fast",
+  "short_name": "$SANIC",
+  "description": "Run the trenches, stack gold rings, and go irresponsibly fast in the playable $SANIC WebGL runner.",
+  "lang": "en-US",
+  "dir": "ltr",
+  "start_url": "https://www.sanic.fun/",
+  "scope": "https://www.sanic.fun/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#03194f",
+  "theme_color": "#0047ab",
+  "categories": [
+    "games",
+    "entertainment"
+  ],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icons/sanic-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/sanic-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/sanic-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

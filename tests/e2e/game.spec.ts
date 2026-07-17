@@ -1459,14 +1459,14 @@ test('publishes crawler-safe launch metadata', async ({ page, isMobile }) => {
   test.skip(isMobile, 'static metadata is viewport-independent');
   await page.goto('/?forceFallback=1');
   await expect(page).toHaveTitle('$SANIC — I Love To Go Fast');
-  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://sanic.fun/');
-  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://sanic.fun/');
-  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', 'https://sanic.fun/media/sanic-og.jpg');
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://www.sanic.fun/');
+  await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://www.sanic.fun/');
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute('content', 'https://www.sanic.fun/media/sanic-og.jpg');
   await expect(page.locator('meta[property="og:image:width"]')).toHaveAttribute('content', '1200');
   await expect(page.locator('meta[property="og:image:height"]')).toHaveAttribute('content', '630');
   await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute('content', 'summary_large_image');
   await expect(page.locator('meta[name="twitter:site"]')).toHaveAttribute('content', '@memesofsanic');
-  await expect(page.locator('meta[name="twitter:image"]')).toHaveAttribute('content', 'https://sanic.fun/media/sanic-og.jpg');
+  await expect(page.locator('meta[name="twitter:image"]')).toHaveAttribute('content', 'https://www.sanic.fun/media/sanic-og.jpg');
 });
 
 test('fallback score sharing opens an encoded X intent and saves a PNG card', async ({ page }) => {

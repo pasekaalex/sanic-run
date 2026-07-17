@@ -12,6 +12,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:pwa:artifacts": "npm run build && npm run build:e2e && npm run build:production-adversarial && vitest run --config vitest.artifacts.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:production:normal": "npm run build && playwright test --config=playwright.production.config.ts --workers=1",
     "test:e2e:production:adversarial": "npm run build:production-adversarial && SANIC_PRODUCTION_OUT_DIR=dist-adversarial playwright test --config=playwright.production.config.ts --workers=1",
