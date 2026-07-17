@@ -322,6 +322,21 @@ describe('generated service-worker fetch policies', () => {
     expect(worker.shellCache.match).toHaveBeenCalledWith('/index.html');
   });
 
+  it('uses the cached app shell when navigation receives a non-OK response', async () => {
+    const worker = compileWorker(source);
+    const shell = { body: 'cached shell after 503' };
+    worker.fetch.mockResolvedValue({ ok: false, status: 503, type: 'basic' });
+    worker.shellCache.match.mockResolvedValue(shell);
+
+    await expect(triggerFetch(worker.handlers.get('fetch'), {
+      method: 'GET',
+      mode: 'navigate',
+      url: 'https://www.sanic.fun/',
+    })).resolves.toBe(shell);
+
+    expect(worker.shellCache.put).not.toHaveBeenCalled();
+  });
+
   it.each([
     '/models/sanic-runner.glb',
     '/media/sanic-og.jpg',
@@ -346,6 +361,41 @@ describe('generated service-worker fetch policies', () => {
     expect(worker.runtimeCache.put).toHaveBeenCalledOnce();
     expect(worker.runtimeCache.put).toHaveBeenCalledWith(request, { cloned: pathname });
   });
+
+  it('uses cached runtime media when the network receives a non-OK response', async () => {
+    const worker = compileWorker(source);
+    const cached = { body: 'cached runner after 503' };
+    worker.fetch.mockResolvedValue({ ok: false, status: 503, type: 'basic' });
+    worker.runtimeCache.match.mockResolvedValue(cached);
+    const request = {
+      destination: '',
+      method: 'GET',
+      mode: 'cors',
+      url: 'https://www.sanic.fun/models/sanic-runner.glb',
+    };
+
+    await expect(
+      triggerFetch(worker.handlers.get('fetch'), request),
+    ).resolves.toBe(cached);
+
+    expect(worker.runtimeCache.put).not.toHaveBeenCalled();
+  });
+
+  it.each(['/manifest.webmanifest', '/favicon.png'])(
+    'serves precached shell metadata while offline: %s',
+    async (pathname) => {
+      const worker = compileWorker(source);
+      const cached = { body: pathname };
+      worker.cacheStorage.match.mockResolvedValue(cached);
+
+      await expect(triggerFetch(worker.handlers.get('fetch'), {
+        destination: pathname.endsWith('.png') ? 'image' : 'manifest',
+        method: 'GET',
+        mode: 'cors',
+        url: `https://www.sanic.fun${pathname}`,
+      })).resolves.toBe(cached);
+    },
+  );
 
   it('does not intercept cross-origin, non-GET, or unrelated requests', () => {
     const worker = compileWorker(source);

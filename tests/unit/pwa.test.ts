@@ -164,6 +164,50 @@ describe('PWA registration gate', () => {
     expect(incomingPostMessage).toHaveBeenCalledWith({ type: 'WARM_RUNTIME' });
     expect(incumbentPostMessage).not.toHaveBeenCalled();
   });
+
+  it('reloads an existing controlled page once when an update takes control', async () => {
+    const controllerChangeListeners = new Set<() => void>();
+    const incumbent = { postMessage: vi.fn() };
+    const registration = {
+      active: incumbent,
+      installing: null,
+      waiting: null,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    const addEventListener = vi.fn((type: string, listener: () => void) => {
+      if (type === 'controllerchange') controllerChangeListeners.add(listener);
+    });
+    const removeEventListener = vi.fn((type: string, listener: () => void) => {
+      if (type === 'controllerchange') controllerChangeListeners.delete(listener);
+    });
+    installServiceWorkerRegistrar(register, {
+      controller: incumbent,
+      addEventListener,
+      removeEventListener,
+    });
+    vi.spyOn(document, 'readyState', 'get').mockReturnValue('loading');
+    const reload = vi.fn();
+    const { registerPwaAfterLoad } = await loadPwaModule();
+
+    registerPwaAfterLoad('production', Promise.resolve(false), { reload });
+    window.dispatchEvent(new Event('load'));
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
+
+    expect(addEventListener).toHaveBeenCalledWith(
+      'controllerchange',
+      expect.any(Function),
+    );
+    for (const listener of [...controllerChangeListeners]) {
+      listener();
+      listener();
+    }
+
+    expect(reload).toHaveBeenCalledOnce();
+    expect(removeEventListener).toHaveBeenCalledWith(
+      'controllerchange',
+      expect.any(Function),
+    );
+  });
 });
 
 describe('fail-soft idempotent registration', () => {

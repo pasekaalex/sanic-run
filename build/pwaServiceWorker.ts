@@ -110,13 +110,13 @@ const networkFirstNavigation = async (request) => {
   try {
     const response = await fetch(request);
     const pathname = new URL(request.url).pathname;
-    if (
-      isSuccessfulSameOriginResponse(response)
-      && (pathname === '/' || pathname === APP_SHELL_URL)
-    ) {
-      await cache.put(APP_SHELL_URL, response.clone());
+    if (isSuccessfulSameOriginResponse(response)) {
+      if (pathname === '/' || pathname === APP_SHELL_URL) {
+        await cache.put(APP_SHELL_URL, response.clone());
+      }
+      return response;
     }
-    return response;
+    return (await cache.match(APP_SHELL_URL)) ?? response;
   }
   catch {
     return (await cache.match(APP_SHELL_URL)) ?? Response.error();
@@ -129,8 +129,9 @@ const networkFirstRuntime = async (request) => {
     const response = await fetch(request);
     if (isSuccessfulSameOriginResponse(response)) {
       await cache.put(request, response.clone());
+      return response;
     }
-    return response;
+    return (await cache.match(request)) ?? response;
   }
   catch {
     return (await cache.match(request)) ?? Response.error();
@@ -188,6 +189,10 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(networkFirstNavigation(request));
+    return;
+  }
+  if (PRECACHE_URLS.includes(url.pathname)) {
+    event.respondWith(cacheFirstImmutable(request));
     return;
   }
   if (url.pathname.startsWith('/assets/')) {

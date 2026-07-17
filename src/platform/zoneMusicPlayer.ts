@@ -259,7 +259,14 @@ export class ZoneMusicPlayer {
           !this.destroyed
           && revision === this.requestRevision
           && requested.id === this.requestedTrack.id
-        ) this.failedZone = requested.id;
+        ) {
+          this.failedZone = requested.id;
+          this.stopSlot(this.outgoing);
+          this.stopSlot(this.active);
+          this.outgoing = null;
+          this.active = null;
+          this.prefetched = null;
+        }
         throw error;
       }
     }

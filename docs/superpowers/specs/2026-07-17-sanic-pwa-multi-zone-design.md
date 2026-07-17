@@ -34,7 +34,7 @@ The browser decodes tracks after the Start gesture. A two-slot buffer player loo
 
 Provide a standards-based web app manifest, 192 px and 512 px icons, maskable icon, standalone display, theme/background colors, and canonical start URL. A generated service worker precaches the versioned app shell and runtime-caches same-origin successful GET requests for scripts, styles, fonts, models, media, and music.
 
-Navigation is network-first with cached shell fallback. Immutable hashed assets are cache-first. Large game assets are cached as the successful first load requests them, avoiding a fragile all-or-nothing install. Updates use a new cache version and delete old SANIC caches. No service worker is registered in the explicit E2E build mode.
+Navigation is network-first with cached shell fallback, including non-OK network responses. Immutable hashed assets are cache-first. Large game assets are cached as the successful first load requests them, avoiding a fragile all-or-nothing install. Updates use a new cache version, reload an already-controlled page once when the new worker takes over to prevent mixed-version sessions, and delete old SANIC caches. No service worker is registered in the explicit E2E build mode.
 
 ## Pixel UI and accessibility
 

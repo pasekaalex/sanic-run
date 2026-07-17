@@ -4,6 +4,14 @@ const SERVICE_WORKER_URL = '/sw.js';
 let registrationAttempt: Promise<ServiceWorkerRegistration | null> | null = null;
 let registrationScheduled = false;
 
+interface PwaLifecycleOptions {
+  readonly reload?: () => void;
+}
+
+const reloadPage = (): void => {
+  window.location.reload();
+};
+
 export const registerPwa = (
   mode: string,
 ): Promise<ServiceWorkerRegistration | null> => {
@@ -52,9 +60,34 @@ const warmRuntimeCache = async (
   }
 };
 
+const watchForUpdateTakeover = (reload: () => void): (() => void) => {
+  if (
+    typeof navigator === 'undefined'
+    || !('serviceWorker' in navigator)
+  ) return () => undefined;
+  const serviceWorker = navigator.serviceWorker;
+  if (
+    serviceWorker.controller == null
+    || typeof serviceWorker.addEventListener !== 'function'
+  ) return () => undefined;
+
+  let reloading = false;
+  const handleControllerChange = (): void => {
+    if (reloading) return;
+    reloading = true;
+    serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+    reload();
+  };
+  serviceWorker.addEventListener('controllerchange', handleControllerChange);
+  return () => {
+    serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+  };
+};
+
 export const registerPwaAfterLoad = (
   mode: string,
   initialization: Promise<boolean>,
+  options: PwaLifecycleOptions = {},
 ): void => {
   if (
     mode !== PRODUCTION_MODE
@@ -68,13 +101,22 @@ export const registerPwaAfterLoad = (
   const initializationSucceeded = initialization.catch(() => false);
 
   const registerAndMaybeWarm = (): void => {
+    const stopWatchingForUpdate = watchForUpdateTakeover(
+      options.reload ?? reloadPage,
+    );
     void Promise.all([
       registerPwa(mode),
       initializationSucceeded,
     ]).then(([registration, succeeded]) => {
-      if (registration === null || !succeeded) return;
+      if (registration === null) {
+        stopWatchingForUpdate();
+        return;
+      }
+      if (!succeeded) return;
       return warmRuntimeCache(registration);
-    }).catch(() => undefined);
+    }).catch(() => {
+      stopWatchingForUpdate();
+    });
   };
   if (document.readyState === 'complete') {
     window.setTimeout(registerAndMaybeWarm, 0);

@@ -417,6 +417,43 @@ describe('ZoneMusicPlayer', () => {
     )).toHaveLength(2);
   });
 
+  it('silences an old zone when the newly requested track cannot load', async () => {
+    const context = new FakeAudioContext();
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('liquidity-loop')) throw new Error('track unavailable');
+      return encodedResponse(1);
+    }) as unknown as typeof fetch;
+    const player = new ZoneMusicPlayer(
+      context as unknown as AudioContext,
+      new FakeAudioNode() as unknown as AudioNode,
+      { fetcher },
+    );
+
+    player.start();
+    await waitForSnapshot(player, ({ activeZone }) => activeZone === 'ringwood-rush');
+    await vi.waitFor(() => {
+      expect(
+        (player as unknown as { preloadInFlight: string | null }).preloadInFlight,
+      ).toBeNull();
+    });
+
+    player.setDistance(840);
+    await vi.waitFor(() => {
+      expect(
+        (player as unknown as { reconcileInFlight: boolean }).reconcileInFlight,
+      ).toBe(false);
+    });
+
+    expect(player.snapshot()).toMatchObject({
+      activeSources: 0,
+      activeZone: null,
+      requestedZone: 'liquidity-loop',
+      retainedBuffers: 0,
+    });
+    expect(context.bufferSources[0]?.stops).toHaveLength(1);
+  });
+
   it('discards zone one when its fetch resolves after zone two is requested', async () => {
     const context = new FakeAudioContext();
     const ringwood = deferred<Response>();
