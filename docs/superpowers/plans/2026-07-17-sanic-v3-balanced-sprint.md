@@ -325,7 +325,7 @@ Use the operating-system keyring or a process-scoped `MESHY_API_KEY`. If the key
 Verify only presence:
 
 ```bash
-test -n "$(secret-tool lookup service meshy api_key)" &&
+test -n "$(secret-tool lookup service meshy account api_key)" &&
   echo "Meshy credential available"
 ```
 
@@ -334,10 +334,10 @@ Do not print the lookup value.
 - [ ] **Step 2: Check balance and submit exactly one rig task**
 
 ```bash
-MESHY_API_KEY="$(secret-tool lookup service meshy api_key)" \
+MESHY_API_KEY="$(secret-tool lookup service meshy account api_key)" \
 python3 blender/scripts/meshy_sprint_reference.py balance
 
-MESHY_API_KEY="$(secret-tool lookup service meshy api_key)" \
+MESHY_API_KEY="$(secret-tool lookup service meshy account api_key)" \
 python3 blender/scripts/meshy_sprint_reference.py rig \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/SANIC-meshy6-v3-meshy-input.glb \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/state.json
@@ -348,7 +348,7 @@ Expected: balance is at least 8 credits and one rig task is stored. If the POST 
 - [ ] **Step 3: Poll and download the one rig result**
 
 ```bash
-MESHY_API_KEY="$(secret-tool lookup service meshy api_key)" \
+MESHY_API_KEY="$(secret-tool lookup service meshy account api_key)" \
 python3 blender/scripts/meshy_sprint_reference.py poll-rig \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/state.json \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/rig
@@ -371,15 +371,15 @@ If rejected, record `rig_approved: false` locally and skip every remaining Meshy
 - [ ] **Step 5: Only after a clean rig, request action 644 once**
 
 ```bash
-MESHY_API_KEY="$(secret-tool lookup service meshy api_key)" \
+MESHY_API_KEY="$(secret-tool lookup service meshy account api_key)" \
 python3 blender/scripts/meshy_sprint_reference.py approve-rig \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/state.json
 
-MESHY_API_KEY="$(secret-tool lookup service meshy api_key)" \
+MESHY_API_KEY="$(secret-tool lookup service meshy account api_key)" \
 python3 blender/scripts/meshy_sprint_reference.py animate \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/state.json
 
-MESHY_API_KEY="$(secret-tool lookup service meshy api_key)" \
+MESHY_API_KEY="$(secret-tool lookup service meshy account api_key)" \
 python3 blender/scripts/meshy_sprint_reference.py poll-animation \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/state.json \
   /home/alex/Downloads/SANIC-Meshy-v3/meshy-reference/sprint-644
