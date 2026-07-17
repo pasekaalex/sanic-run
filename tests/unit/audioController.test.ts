@@ -6,6 +6,16 @@ interface ScheduledValue {
   readonly value: number;
 }
 
+type FailurePoint =
+  | 'oscillator'
+  | 'gain'
+  | 'filter'
+  | 'buffer-source'
+  | 'start'
+  | 'stop';
+
+type EffectName = 'pickup' | 'jump' | 'lane' | 'impact';
+
 class FakeAudioParam {
   public readonly scheduled: ScheduledValue[] = [];
   public value: number;
@@ -75,7 +85,10 @@ class FakeScheduledSourceNode extends FakeAudioNode {
   public started = 0;
   public stopped = 0;
 
-  public constructor(private readonly throwOnStart = false) {
+  public constructor(
+    private readonly fail: (point: FailurePoint) => void,
+    private readonly throwOnStart = false,
+  ) {
     super();
   }
 
@@ -86,10 +99,12 @@ class FakeScheduledSourceNode extends FakeAudioNode {
   public start(): void {
     this.started += 1;
     if (this.throwOnStart) throw new Error('source start failed');
+    this.fail('start');
   }
 
   public stop(): void {
     this.stopped += 1;
+    this.fail('stop');
     for (const listener of this.endedListeners) listener();
   }
 }
@@ -116,7 +131,11 @@ class FakeAudioContext {
   public resumeCount = 0;
   public suspendCount = 0;
   public state: AudioContextState;
+  private deferredResume = false;
+  private failure: { point: FailurePoint; skippedMatches: number } | null = null;
+  private readonly pendingResumeResolutions: Array<() => void> = [];
   private readonly pendingSuspendResolutions: Array<() => void> = [];
+  private readonly stateChangeListeners = new Set<() => void>();
 
   public constructor(
     private readonly throwOnWindStart = false,
@@ -128,13 +147,18 @@ class FakeAudioContext {
     this.state = initialState;
   }
 
+  public addEventListener(type: string, listener: () => void): void {
+    if (type === 'statechange') this.stateChangeListeners.add(listener);
+  }
+
   public close(): Promise<void> {
     this.closeCount += 1;
-    this.state = 'closed';
+    this.setState('closed');
     return Promise.resolve();
   }
 
   public createBiquadFilter(): FakeBiquadFilterNode {
+    this.failIfConfigured('filter');
     const filter = new FakeBiquadFilterNode();
     this.filters.push(filter);
     return filter;
@@ -145,7 +169,9 @@ class FakeAudioContext {
   }
 
   public createBufferSource(): FakeBufferSourceNode {
+    this.failIfConfigured('buffer-source');
     const source = new FakeBufferSourceNode(
+      (point) => this.failIfConfigured(point),
       this.throwOnWindStart && this.bufferSources.length === 0,
     );
     this.bufferSources.push(source);
@@ -153,25 +179,56 @@ class FakeAudioContext {
   }
 
   public createGain(): FakeGainNode {
+    this.failIfConfigured('gain');
     const gain = new FakeGainNode();
     this.gains.push(gain);
     return gain;
   }
 
   public createOscillator(): FakeOscillatorNode {
+    this.failIfConfigured('oscillator');
     if (this.throwOnMusicStart && this.oscillators.length === 0) {
       throw new Error('music oscillator creation failed');
     }
-    const oscillator = new FakeOscillatorNode();
+    const oscillator = new FakeOscillatorNode((point) => this.failIfConfigured(point));
     this.oscillators.push(oscillator);
     return oscillator;
+  }
+
+  public deferNextResume(): void {
+    this.deferredResume = true;
+  }
+
+  public dispatchStateChange(): void {
+    for (const listener of [...this.stateChangeListeners]) listener();
+  }
+
+  public failNext(point: FailurePoint, skippedMatches = 0): void {
+    this.failure = { point, skippedMatches };
+  }
+
+  public removeEventListener(type: string, listener: () => void): void {
+    if (type === 'statechange') this.stateChangeListeners.delete(listener);
   }
 
   public resume(): Promise<void> {
     this.resumeCount += 1;
     if (this.rejectResume) return Promise.reject(new Error('resume rejected'));
-    this.state = 'running';
+    if (this.deferredResume) {
+      this.deferredResume = false;
+      return new Promise((resolve) => {
+        this.pendingResumeResolutions.push(() => {
+          this.setState('running');
+          resolve();
+        });
+      });
+    }
+    this.setState('running');
     return Promise.resolve();
+  }
+
+  public resolvePendingResumes(): void {
+    for (const resolve of this.pendingResumeResolutions.splice(0)) resolve();
   }
 
   public suspend(): Promise<void> {
@@ -179,17 +236,37 @@ class FakeAudioContext {
     if (this.deferSuspend) {
       return new Promise((resolve) => {
         this.pendingSuspendResolutions.push(() => {
-          this.state = 'suspended';
+          this.setState('suspended');
           resolve();
         });
       });
     }
-    this.state = 'suspended';
+    this.setState('suspended');
     return Promise.resolve();
   }
 
   public resolvePendingSuspends(): void {
     for (const resolve of this.pendingSuspendResolutions.splice(0)) resolve();
+  }
+
+  public setState(state: AudioContextState): void {
+    if (this.state === state) return;
+    this.state = state;
+    this.dispatchStateChange();
+  }
+
+  public stateListenerCount(): number {
+    return this.stateChangeListeners.size;
+  }
+
+  private failIfConfigured(point: FailurePoint): void {
+    if (this.failure?.point !== point) return;
+    if (this.failure.skippedMatches > 0) {
+      this.failure.skippedMatches -= 1;
+      return;
+    }
+    this.failure = null;
+    throw new Error(`${point} failed`);
   }
 }
 
@@ -223,6 +300,43 @@ afterEach(() => {
   restoreAudioContext = null;
   vi.useRealTimers();
 });
+
+const invokeEffect = (audio: AudioController, effect: EffectName): void => {
+  if (effect === 'pickup') {
+    audio.pickup(3);
+    return;
+  }
+  audio[effect]();
+};
+
+const captureNodeCounts = (context: FakeAudioContext) => ({
+  bufferSources: context.bufferSources.length,
+  filters: context.filters.length,
+  gains: context.gains.length,
+  oscillators: context.oscillators.length,
+});
+
+const captureCreatedNodes = (
+  context: FakeAudioContext,
+  before: ReturnType<typeof captureNodeCounts>,
+) => ({
+  bufferSources: context.bufferSources.slice(before.bufferSources),
+  filters: context.filters.slice(before.filters),
+  gains: context.gains.slice(before.gains),
+  oscillators: context.oscillators.slice(before.oscillators),
+});
+
+const expectCreatedNodesReleased = (
+  created: ReturnType<typeof captureCreatedNodes>,
+): void => {
+  for (const source of [...created.bufferSources, ...created.oscillators]) {
+    expect(source.stopped).toBeGreaterThan(0);
+    expect(source.disconnected).toBe(true);
+  }
+  for (const node of [...created.filters, ...created.gains]) {
+    expect(node.disconnected).toBe(true);
+  }
+};
 
 describe('AudioController', () => {
   it('does not allocate a context or emit effects before explicit start', () => {
@@ -342,6 +456,116 @@ describe('AudioController', () => {
     audio.destroy();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('serializes one recovery attempt after the context is externally suspended', async () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    audio.start();
+    expect(context.stateListenerCount()).toBe(1);
+    context.deferNextResume();
+    context.setState('suspended');
+    context.dispatchStateChange();
+
+    expect(context.resumeCount).toBe(1);
+    context.resolvePendingResumes();
+    await vi.waitFor(() => {
+      expect(context.state).toBe('running');
+      expect(context.resumeCount).toBe(1);
+    });
+    audio.destroy();
+  });
+
+  it('does not auto-resume after an app-requested pause', async () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    expect(context.stateListenerCount()).toBe(1);
+    audio.suspend();
+    context.dispatchStateChange();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(context.state).toBe('suspended');
+    expect(context.suspendCount).toBe(1);
+    expect(context.resumeCount).toBe(0);
+    audio.destroy();
+  });
+
+  it('removes context-state recovery when destroyed', async () => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+
+    audio.start();
+    expect(context.stateListenerCount()).toBe(1);
+    audio.destroy();
+    expect(context.stateListenerCount()).toBe(0);
+    context.setState('suspended');
+    context.dispatchStateChange();
+    await Promise.resolve();
+
+    expect(context.resumeCount).toBe(0);
+  });
+
+  it.each(
+    (['pickup', 'jump', 'lane', 'impact'] as const).flatMap((effect) => (
+      (['oscillator', 'gain', 'start', 'stop'] as const).map((failure) => [effect, failure] as const)
+    )),
+  )('%s contains a later %s failure and releases partial effect nodes', (effect, failure) => {
+    const context = new FakeAudioContext();
+    installAudioContext(context);
+    const audio = new AudioController();
+    audio.start();
+    const before = captureNodeCounts(context);
+    context.failNext(failure);
+
+    let thrown: unknown;
+    try {
+      invokeEffect(audio, effect);
+    } catch (error) {
+      thrown = error;
+    }
+    const created = captureCreatedNodes(context, before);
+    audio.destroy();
+
+    expect(thrown).toBeUndefined();
+    expectCreatedNodesReleased(created);
+  });
+
+  it.each([
+    ['buffer-source', 0],
+    ['filter', 0],
+    ['gain', 1],
+    ['start', 1],
+    ['stop', 1],
+  ] as const)(
+    'impact contains a later noise %s failure and releases partial effect nodes',
+    (failure, skippedMatches) => {
+      const context = new FakeAudioContext();
+      installAudioContext(context);
+      const audio = new AudioController();
+      audio.start();
+      const before = captureNodeCounts(context);
+      context.failNext(failure, skippedMatches);
+
+      let thrown: unknown;
+      try {
+        audio.impact();
+      } catch (error) {
+        thrown = error;
+      }
+      const created = captureCreatedNodes(context, before);
+      audio.destroy();
+
+      expect(thrown).toBeUndefined();
+      expectCreatedNodesReleased(created);
+    },
+  );
 
   it('caps the master gain and ramps mute state only between zero and the cap', () => {
     const context = new FakeAudioContext();

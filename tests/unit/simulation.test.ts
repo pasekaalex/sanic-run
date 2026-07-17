@@ -224,6 +224,42 @@ describe('GameSimulation', () => {
     expect(game.snapshot().score - Math.floor(game.snapshot().distance)).toBe(15_000);
   });
 
+  it('returns the multiplier to one after a miss before scoring the next ring', () => {
+    const coins = Object.freeze([
+      ...Array.from({ length: 10 }, (_, index): CoinSpawn => Object.freeze({
+        id: `streak-${index}`,
+        lane: 0,
+        height: 0.9,
+        offset: 0.75 + index * 1.1,
+      })),
+      Object.freeze({ id: 'miss', lane: 1, height: 0.9, offset: 12 }),
+      Object.freeze({ id: 'after-miss', lane: 0, height: 0.9, offset: 15.5 }),
+    ]);
+    const game = new GameSimulation(30, scriptedSource([Object.freeze({
+      id: 'combo-reset',
+      at: 0,
+      coins,
+      obstacles: Object.freeze([]),
+    })]));
+
+    game.start();
+    advance(game, 0.75);
+    expect(game.snapshot()).toMatchObject({
+      rings: 10,
+      multiplier: 1,
+      ringStreak: 0,
+    });
+
+    advance(game, 0.2);
+    const snapshot = game.snapshot();
+    expect(snapshot).toMatchObject({
+      rings: 11,
+      multiplier: 1,
+      ringStreak: 1,
+    });
+    expect(snapshot.score - Math.floor(snapshot.distance)).toBe(1_100);
+  });
+
   it('ends the run on an occupied grounded obstacle lane', () => {
     const game = new GameSimulation(4, scriptedObstacleSource({
       id: 'impact',

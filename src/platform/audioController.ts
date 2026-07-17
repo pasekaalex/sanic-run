@@ -31,6 +31,9 @@ export class AudioController {
   private desiredRunning = false;
   private stateSyncInFlight = false;
   private destroyed = false;
+  private readonly handleContextStateChange = (): void => {
+    this.requestStateSync();
+  };
 
   public constructor(muted = false) {
     this.muted = muted;
@@ -76,8 +79,10 @@ export class AudioController {
       this.musicBus = musicBus;
       this.music = music;
       this.wind = wind;
+      context.addEventListener('statechange', this.handleContextStateChange);
       this.requestStateSync();
     } catch {
+      this.removeContextStateListener(context);
       music?.destroy();
       this.cleanupWind(wind);
       this.disconnect(musicBus);
@@ -197,13 +202,14 @@ export class AudioController {
     if (this.destroyed) return;
     this.destroyed = true;
 
+    const context = this.context;
+    this.removeContextStateListener(context);
     this.music?.destroy();
     this.cleanupWind(this.wind);
     this.disconnect(this.musicBus);
     this.disconnect(this.effectsBus);
     this.disconnect(this.master);
 
-    const context = this.context;
     this.music = null;
     this.wind = null;
     this.musicBus = null;
@@ -333,6 +339,14 @@ export class AudioController {
     }
   }
 
+  private removeContextStateListener(context: AudioContext | null): void {
+    try {
+      context?.removeEventListener('statechange', this.handleContextStateChange);
+    } catch {
+      // Listener cleanup must not prevent the rest of the graph from releasing.
+    }
+  }
+
   private tone(options: ToneOptions): void {
     const context = this.context;
     const effectsBus = this.effectsBus;
@@ -344,27 +358,38 @@ export class AudioController {
       || effectsBus === null
     ) return;
 
-    const start = context.currentTime + (options.delay ?? 0);
-    const attackEnd = start + Math.min(0.012, options.duration * 0.25);
-    const end = start + options.duration;
-    const oscillator = context.createOscillator();
-    const envelope = context.createGain();
+    let oscillator: OscillatorNode | null = null;
+    let envelope: GainNode | null = null;
 
-    oscillator.type = options.type;
-    oscillator.frequency.setValueAtTime(options.startFrequency, start);
-    oscillator.frequency.exponentialRampToValueAtTime(options.endFrequency, end);
-    envelope.gain.setValueAtTime(SILENCE, start);
-    envelope.gain.exponentialRampToValueAtTime(options.volume, attackEnd);
-    envelope.gain.exponentialRampToValueAtTime(SILENCE, end);
+    try {
+      const start = context.currentTime + (options.delay ?? 0);
+      const attackEnd = start + Math.min(0.012, options.duration * 0.25);
+      const end = start + options.duration;
+      oscillator = context.createOscillator();
+      envelope = context.createGain();
 
-    oscillator.connect(envelope);
-    envelope.connect(effectsBus);
-    oscillator.addEventListener('ended', () => {
-      oscillator.disconnect();
-      envelope.disconnect();
-    }, { once: true });
-    oscillator.start(start);
-    oscillator.stop(end + 0.01);
+      oscillator.type = options.type;
+      oscillator.frequency.setValueAtTime(options.startFrequency, start);
+      oscillator.frequency.exponentialRampToValueAtTime(options.endFrequency, end);
+      envelope.gain.setValueAtTime(SILENCE, start);
+      envelope.gain.exponentialRampToValueAtTime(options.volume, attackEnd);
+      envelope.gain.exponentialRampToValueAtTime(SILENCE, end);
+
+      oscillator.connect(envelope);
+      envelope.connect(effectsBus);
+      const createdOscillator = oscillator;
+      const createdEnvelope = envelope;
+      oscillator.addEventListener('ended', () => {
+        this.disconnect(createdOscillator);
+        this.disconnect(createdEnvelope);
+      }, { once: true });
+      oscillator.start(start);
+      oscillator.stop(end + 0.01);
+    } catch {
+      this.stop(oscillator);
+      this.disconnect(oscillator);
+      this.disconnect(envelope);
+    }
   }
 
   private noiseBurst(duration: number, volume: number, frequency: number): void {
@@ -378,33 +403,47 @@ export class AudioController {
       || effectsBus === null
     ) return;
 
-    const frameCount = Math.max(1, Math.floor(context.sampleRate * duration));
-    const buffer = context.createBuffer(1, frameCount, context.sampleRate);
-    const samples = buffer.getChannelData(0);
-    for (let index = 0; index < samples.length; index += 1) {
-      samples[index] = Math.random() * 2 - 1;
+    let source: AudioBufferSourceNode | null = null;
+    let filter: BiquadFilterNode | null = null;
+    let envelope: GainNode | null = null;
+
+    try {
+      const frameCount = Math.max(1, Math.floor(context.sampleRate * duration));
+      const buffer = context.createBuffer(1, frameCount, context.sampleRate);
+      const samples = buffer.getChannelData(0);
+      for (let index = 0; index < samples.length; index += 1) {
+        samples[index] = Math.random() * 2 - 1;
+      }
+
+      source = context.createBufferSource();
+      filter = context.createBiquadFilter();
+      envelope = context.createGain();
+      const now = context.currentTime;
+
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(frequency, now);
+      envelope.gain.setValueAtTime(volume, now);
+      envelope.gain.exponentialRampToValueAtTime(SILENCE, now + duration);
+
+      source.buffer = buffer;
+      source.connect(filter);
+      filter.connect(envelope);
+      envelope.connect(effectsBus);
+      const createdSource = source;
+      const createdFilter = filter;
+      const createdEnvelope = envelope;
+      source.addEventListener('ended', () => {
+        this.disconnect(createdSource);
+        this.disconnect(createdFilter);
+        this.disconnect(createdEnvelope);
+      }, { once: true });
+      source.start(now);
+      source.stop(now + duration);
+    } catch {
+      this.stop(source);
+      this.disconnect(source);
+      this.disconnect(filter);
+      this.disconnect(envelope);
     }
-
-    const source = context.createBufferSource();
-    const filter = context.createBiquadFilter();
-    const envelope = context.createGain();
-    const now = context.currentTime;
-
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(frequency, now);
-    envelope.gain.setValueAtTime(volume, now);
-    envelope.gain.exponentialRampToValueAtTime(SILENCE, now + duration);
-
-    source.buffer = buffer;
-    source.connect(filter);
-    filter.connect(envelope);
-    envelope.connect(effectsBus);
-    source.addEventListener('ended', () => {
-      source.disconnect();
-      filter.disconnect();
-      envelope.disconnect();
-    }, { once: true });
-    source.start(now);
-    source.stop(now + duration);
   }
 }

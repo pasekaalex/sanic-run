@@ -339,6 +339,7 @@ export class GameSimulation {
         remaining.push(coin);
       } else {
         this.ringStreakValue = 0;
+        this.multiplierValue = 1;
       }
     }
 
