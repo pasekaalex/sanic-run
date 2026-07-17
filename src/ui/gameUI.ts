@@ -103,6 +103,9 @@ export class GameUI {
         <div class="arcade-score-strip" data-arcade-score-strip aria-hidden="true">
           <span>1 PLAYER</span><span>HI 000000</span><span>1994 MODE</span>
         </div>
+        <span class="attract-stage__raster" aria-hidden="true"></span>
+        <span class="attract-stage__ridge attract-stage__ridge--far" aria-hidden="true"></span>
+        <span class="attract-stage__ridge attract-stage__ridge--near" aria-hidden="true"></span>
         <span class="attract-stage__cloud attract-stage__cloud--one"></span>
         <span class="attract-stage__cloud attract-stage__cloud--two"></span>
         <div class="attract-stage__hills">
@@ -130,8 +133,19 @@ export class GameUI {
       <section class="intro-panel" data-view="intro" aria-labelledby="intro-title" hidden>
         ${stageMarqueeMarkup()}
         <p class="kicker">${BRAND.tagline}</p>
-        <h1 id="intro-title">${BRAND.name}</h1>
+        <div class="title-lockup" data-title-lockup>
+          <h1 id="intro-title" aria-label="$SANIC">
+            <span class="title-coin" aria-hidden="true">$</span>
+            <span class="title-word" aria-hidden="true">SANIC</span>
+          </h1>
+          <p class="title-subtitle" aria-hidden="true">RING RUNNER</p>
+        </div>
         <p class="context-banner" role="alert" data-context-banner hidden>SANIC HIT A DIMENSIONAL WALL</p>
+        <div class="arcade-menu" data-arcade-menu>
+          <span class="arcade-menu__cursor" aria-hidden="true">▶</span>
+          <button class="primary-button" type="button" data-action="start">PRESS START</button>
+          <small>GOTTA GO FAST</small>
+        </div>
         <div class="meme-reel" role="group" data-meme-ticker aria-label="$SANIC meme reel">
           <span class="meme-reel__label" aria-hidden="true">LIVE FROM THE TRENCHES</span>
           <div class="meme-reel__window">
@@ -146,18 +160,15 @@ export class GameUI {
           </div>
         </div>
         <p class="intro-panel__tagline">RUN THE TRENCHES. STACK RINGS.<br><strong>GO FAST.</strong></p>
-        <div class="arcade-menu" data-arcade-menu>
-          <span class="arcade-menu__cursor" aria-hidden="true">▶</span>
-          <button class="primary-button" type="button" data-action="start">PRESS START</button>
-          <small>GOTTA GO FAST</small>
+        <div class="service-deck" data-service-deck>
+          ${contractMarkup('contract--intro')}
+          <nav class="intro-panel__links" aria-label="Launch links">${linkMarkup()}</nav>
+          <div class="controls-copy" aria-label="Game controls">
+            <span><b>A D / ← →</b> MOVE</span><span><b>W / ↑ / SPACE</b> JUMP</span><span><b>SWIPE</b> ON MOBILE</span>
+          </div>
+          <button class="text-button" type="button" data-action="mute" aria-label="Mute sound">SOUND: ON</button>
+          <details class="disclosure"><summary>MEME COIN DISCLOSURE</summary><p>${BRAND.disclosure}</p></details>
         </div>
-        ${contractMarkup('contract--intro')}
-        <nav class="intro-panel__links" aria-label="Launch links">${linkMarkup()}</nav>
-        <div class="controls-copy" aria-label="Game controls">
-          <span><b>A D / ← →</b> MOVE</span><span><b>W / ↑ / SPACE</b> JUMP</span><span><b>SWIPE</b> ON MOBILE</span>
-        </div>
-        <button class="text-button" type="button" data-action="mute" aria-label="Mute sound">SOUND: ON</button>
-        <details class="disclosure"><summary>MEME COIN DISCLOSURE</summary><p>${BRAND.disclosure}</p></details>
       </section>
 
       <section class="hud" data-view="hud" aria-label="Run statistics" hidden>

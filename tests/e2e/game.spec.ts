@@ -103,6 +103,14 @@ test('presents one selected PRESS START action and complete stage identity', asy
   await expect(start).toBeVisible();
   await expect(start).toHaveAttribute('data-action', 'start');
   await expect(page.getByText('GOTTA GO FAST', { exact: true })).toBeVisible();
+
+  await page.keyboard.press('Tab');
+  await expect(start).toBeFocused();
+  const focus = await start.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { background: style.backgroundColor, outline: style.outlineColor };
+  });
+  expect(contrastRatio(focus.outline, focus.background)).toBeGreaterThanOrEqual(3);
 });
 
 test('creates a melodic browser audio graph only after the Start gesture', async ({ page }) => {
@@ -259,6 +267,31 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
   await expect(page.locator('[data-meme-line]')).toHaveText(memes);
   await expect(page.getByRole('button', { name: 'PRESS START' })).toBeVisible();
 
+  const shell = await page.evaluate(() => {
+    const style = (selector: string, pseudo?: string): CSSStyleDeclaration =>
+      getComputedStyle(document.querySelector<HTMLElement>(selector)!, pseudo);
+    return {
+      rootRaster: style('#app-ui', '::before').backgroundImage,
+      bezelChecker: style('.arcade-bezel__bottom').backgroundImage,
+      bezelPointerEvents: style('[data-arcade-bezel]').pointerEvents,
+      chrome: style('.stage-marquee__chrome').backgroundImage,
+      checker: style('.stage-marquee__checker').backgroundImage,
+      ringRadius: style('.stage-marquee__ring').borderRadius,
+      titleFill: style('.title-word').backgroundImage,
+      cursorAnimation: style('.arcade-menu__cursor').animationName,
+      titleAnimation: style('.title-lockup').animationName,
+    };
+  });
+  expect(shell.rootRaster).toContain('repeating-linear-gradient');
+  expect(shell.bezelChecker).toContain('repeating-conic-gradient');
+  expect(shell.bezelPointerEvents).toBe('none');
+  expect(shell.chrome).toContain('linear-gradient');
+  expect(shell.checker).toContain('repeating-conic-gradient');
+  expect(shell.ringRadius).toBe('50%');
+  expect(shell.titleFill).toContain('linear-gradient');
+  expect(shell.cursorAnimation).not.toBe('none');
+  expect(shell.titleAnimation).not.toBe('none');
+
   const motion = await page.evaluate(() => {
     const style = (selector: string): CSSStyleDeclaration =>
       getComputedStyle(document.querySelector<HTMLElement>(selector)!);
@@ -267,7 +300,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
       gridAnimation: style('.attract-stage__grid').animationName,
       checkerAnimation: style('.attract-stage__checker').animationName,
       ringAnimation: style('.pixel-ring').animationName,
-      titleAnimation: style('.intro-panel h1').animationName,
+      titleAnimation: style('.title-lockup').animationName,
       promptAnimation: style('.arcade-menu__cursor').animationName,
       tickerAnimation: style('.meme-reel__track').animationName,
     };
@@ -285,7 +318,7 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
     const animation = track.getAnimations()[0];
     if (animation === undefined) throw new Error('Missing meme reel animation');
     animation.pause();
-    return [1_200, 3_600, 6_000, 8_400, 10_800, 13_200].map((time) => {
+    return [1_800, 5_400, 9_000, 12_600, 16_200, 19_800].map((time) => {
       animation.currentTime = time;
       return Math.round(new DOMMatrixReadOnly(getComputedStyle(track).transform).m42 * 100) / 100;
     });
@@ -295,19 +328,33 @@ test('runs an original animated 16-bit attract mode with a meme reel', async ({ 
   await page.getByRole('button', { name: 'PRESS START' }).click();
   await expect(page.locator('#app-ui')).toHaveAttribute('data-phase', 'playing');
   await expect(attractStage).toHaveCSS('opacity', '0');
-  const playingStage = await attractStage.evaluate((element) => ({
-    opacity: Number(getComputedStyle(element).opacity),
-    visibility: getComputedStyle(element).visibility,
-    gridPlayState: getComputedStyle(element.querySelector('.attract-stage__grid')!).animationPlayState,
-    checkerPlayState: getComputedStyle(element.querySelector('.attract-stage__checker')!).animationPlayState,
-    ringPlayState: getComputedStyle(element.querySelector('.pixel-ring')!).animationPlayState,
-  }));
+  const playingStage = await page.evaluate(() => {
+    const style = (selector: string): CSSStyleDeclaration =>
+      getComputedStyle(document.querySelector<HTMLElement>(selector)!);
+    return {
+      opacity: Number(style('[data-attract-stage]').opacity),
+      visibility: style('[data-attract-stage]').visibility,
+      bezelOpacity: Number(style('[data-arcade-bezel]').opacity),
+      bezelVisibility: style('[data-arcade-bezel]').visibility,
+      gridPlayState: style('.attract-stage__grid').animationPlayState,
+      checkerPlayState: style('.attract-stage__checker').animationPlayState,
+      ringPlayState: style('.pixel-ring').animationPlayState,
+      titlePlayState: style('.title-lockup').animationPlayState,
+      cursorPlayState: style('.arcade-menu__cursor').animationPlayState,
+      marqueeCheckerPlayState: style('.stage-marquee__checker').animationPlayState,
+    };
+  });
   expect(playingStage).toEqual({
     opacity: 0,
     visibility: 'hidden',
+    bezelOpacity: 0,
+    bezelVisibility: 'hidden',
     gridPlayState: 'paused',
     checkerPlayState: 'paused',
     ringPlayState: 'paused',
+    titlePlayState: 'paused',
+    cursorPlayState: 'paused',
+    marqueeCheckerPlayState: 'paused',
   });
 });
 
@@ -411,7 +458,7 @@ test('disables themed transitions when reduced motion is requested', async ({ pa
     const grid = getComputedStyle(document.querySelector('.attract-stage__grid')!);
     const checker = getComputedStyle(document.querySelector('.attract-stage__checker')!);
     const ring = getComputedStyle(document.querySelector('.pixel-ring')!);
-    const title = getComputedStyle(document.querySelector('.intro-panel h1')!);
+    const title = getComputedStyle(document.querySelector('.title-lockup')!);
     const prompt = getComputedStyle(document.querySelector('.arcade-menu__cursor')!);
     const ticker = getComputedStyle(document.querySelector('.meme-reel__track')!);
     return {
