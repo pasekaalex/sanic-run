@@ -1,3 +1,4 @@
+import type { ZoneId } from '../game/zones';
 import { ZoneMusicPlayer } from './zoneMusicPlayer';
 
 const MASTER_GAIN = 0.16;
@@ -38,7 +39,7 @@ export class AudioController {
   private desiredMusicRunning = false;
   private stateSyncInFlight = false;
   private destroyed = false;
-  private musicDistance = 0;
+  private musicZone: ZoneId = 'ringwood-rush';
   private readonly handleContextStateChange = (): void => {
     this.requestStateSync();
   };
@@ -80,7 +81,7 @@ export class AudioController {
 
       wind = this.createWind(context, effectsBus);
       music = new ZoneMusicPlayer(context, musicBus);
-      music.setDistance(this.musicDistance);
+      music.setZone(this.musicZone);
       music.start();
       if (context.state !== 'running') music.pause();
       this.context = context;
@@ -193,13 +194,13 @@ export class AudioController {
     this.requestStateSync();
   }
 
-  public setDistance(distance: number): void {
+  public setZone(zone: ZoneId): void {
     if (this.destroyed) return;
-    this.musicDistance = Number.isFinite(distance) ? Math.max(0, distance) : 0;
+    this.musicZone = zone;
     try {
-      this.music?.setDistance(this.musicDistance);
+      this.music?.setZone(zone);
     } catch {
-      // Per-step zone projection must never interrupt simulation.
+      // Per-step zone synchronization must never interrupt simulation.
     }
   }
 

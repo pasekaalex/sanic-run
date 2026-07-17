@@ -1,6 +1,7 @@
 import { BRAND, GAME } from '../config';
 import { GameSimulation } from '../game/simulation';
 import type { GameCommand, SimulationSnapshot } from '../game/types';
+import { zoneAtDistance } from '../game/zones';
 import { jumpStarted } from '../render/animationTiming';
 import { AudioController } from '../platform/audioController';
 import { InputController } from '../platform/inputController';
@@ -477,7 +478,7 @@ export class GameApp {
   }
 
   private syncAudioZone(snapshot: Readonly<SimulationSnapshot>): void {
-    this.audio.setDistance(snapshot.distance);
+    this.audio.setZone(zoneAtDistance(snapshot.distance).id);
   }
 
   private resetClocks(): void {

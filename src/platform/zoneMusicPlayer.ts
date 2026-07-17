@@ -1,7 +1,6 @@
-export type ZoneMusicId =
-  | 'ringwood-rush'
-  | 'liquidity-loop'
-  | 'ansem-after-dark';
+import { ZONES, zoneAtDistance, type ZoneId } from '../game/zones';
+
+export type ZoneMusicId = ZoneId;
 
 export interface ZoneMusicTrack {
   readonly id: ZoneMusicId;
@@ -12,26 +11,31 @@ export interface ZoneMusicTrack {
 
 export const ZONE_MUSIC_CROSSFADE_SECONDS = 1.2;
 
-export const ZONE_MUSIC_TRACKS: readonly ZoneMusicTrack[] = Object.freeze([
-  Object.freeze({
-    id: 'ringwood-rush',
+const ZONE_MUSIC_METADATA = Object.freeze({
+  'ringwood-rush': Object.freeze({
     bpm: 148,
-    startDistance: 0,
     url: '/music/ringwood-rush.mp3',
   }),
-  Object.freeze({
-    id: 'liquidity-loop',
+  'liquidity-loop': Object.freeze({
     bpm: 164,
-    startDistance: 840,
     url: '/music/liquidity-loop.mp3',
   }),
-  Object.freeze({
-    id: 'ansem-after-dark',
+  'ansem-after-dark': Object.freeze({
     bpm: 178,
-    startDistance: 1_960,
     url: '/music/ansem-after-dark.mp3',
   }),
-]);
+} as const satisfies Readonly<Record<
+  ZoneId,
+  Readonly<Pick<ZoneMusicTrack, 'bpm' | 'url'>>
+>>);
+
+export const ZONE_MUSIC_TRACKS: readonly ZoneMusicTrack[] = Object.freeze(
+  ZONES.map(({ id, startDistance }) => Object.freeze({
+    id,
+    startDistance,
+    ...ZONE_MUSIC_METADATA[id],
+  })),
+);
 
 const TRACK_BY_ID = new Map(
   ZONE_MUSIC_TRACKS.map((track) => [track.id, track] as const),
@@ -75,10 +79,7 @@ export interface ZoneMusicPlayerSnapshot {
 }
 
 export const zoneMusicAtDistance = (distance: number): ZoneMusicTrack => {
-  const normalized = Number.isFinite(distance) ? Math.max(0, distance) : 0;
-  if (normalized >= 1_960) return ZONE_MUSIC_TRACKS[2]!;
-  if (normalized >= 840) return ZONE_MUSIC_TRACKS[1]!;
-  return ZONE_MUSIC_TRACKS[0]!;
+  return TRACK_BY_ID.get(zoneAtDistance(distance).id) ?? ZONE_MUSIC_TRACKS[0]!;
 };
 
 export class ZoneMusicPlayer {

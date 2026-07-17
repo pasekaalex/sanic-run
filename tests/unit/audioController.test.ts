@@ -432,13 +432,13 @@ describe('AudioController', () => {
     audio.destroy();
   });
 
-  it('uses the latest distance supplied before start for the first authored track', async () => {
+  it('uses the latest authoritative zone supplied before start for the first authored track', async () => {
     const context = new FakeAudioContext();
     installAudioContext(context);
     const fetcher = installMusicFetch();
     const audio = new AudioController();
 
-    expect(() => audio.setDistance(840)).not.toThrow();
+    expect(() => audio.setZone('liquidity-loop')).not.toThrow();
     audio.start();
     await vi.waitFor(() => {
       expect(fetcher).toHaveBeenCalled();

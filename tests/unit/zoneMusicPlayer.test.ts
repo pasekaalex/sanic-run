@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ZONES } from '../../src/game/zones';
 import {
   ZONE_MUSIC_CROSSFADE_SECONDS,
   ZONE_MUSIC_TRACKS,
@@ -174,7 +175,15 @@ describe('zone music manifest', () => {
     expect(zoneMusicAtDistance(840).id).toBe('liquidity-loop');
     expect(zoneMusicAtDistance(1_959.999).id).toBe('liquidity-loop');
     expect(zoneMusicAtDistance(1_960).id).toBe('ansem-after-dark');
+    expect(zoneMusicAtDistance(Number.POSITIVE_INFINITY).id).toBe('ansem-after-dark');
     expect(zoneMusicAtDistance(Number.NaN).id).toBe('ringwood-rush');
+    expect(ZONE_MUSIC_TRACKS.map(({ id, startDistance }) => ({
+      id,
+      startDistance,
+    }))).toEqual(ZONES.map(({ id, startDistance }) => ({
+      id,
+      startDistance,
+    })));
   });
 });
 
