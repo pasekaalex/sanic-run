@@ -54,6 +54,7 @@ import {
   createCharacterPoseProbeUpdater,
   type CharacterPoseProbeUpdater,
 } from './characterPoseProbe';
+import { cameraFramingForViewport } from './cameraFraming';
 import { uniformScaleForHeight } from './modelScale';
 import { nextSpinRotation } from './spinPresentation';
 
@@ -625,11 +626,12 @@ export class WorldRenderer {
     const width = Math.max(1, this.canvas.clientWidth || window.innerWidth || 1);
     const height = Math.max(1, this.canvas.clientHeight || window.innerHeight || 1);
     const mobile = width < 700;
+    const framing = cameraFramingForViewport(width, height);
     const dprCap = this.lowEffects ? 1 : mobile ? 1.5 : 1.75;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
-    this.camera.fov = mobile ? 61 : 53;
+    this.camera.fov = framing.fov;
     this.camera.updateProjectionMatrix();
   }
 
@@ -998,13 +1000,22 @@ export class WorldRenderer {
   }
 
   private updateCamera(playerX: number, playerY: number, dt: number): void {
-    const mobile = (this.canvas.clientWidth || window.innerWidth) < 700;
+    const width = Math.max(1, this.canvas.clientWidth || window.innerWidth || 1);
+    const height = Math.max(1, this.canvas.clientHeight || window.innerHeight || 1);
+    const framing = cameraFramingForViewport(width, height);
     const laneVelocity = dt > 0 ? (playerX - this.lastPlayerX) / dt : 0;
     const targetBank = this.lowEffects ? 0 : MathUtils.clamp(-laneVelocity * 0.007, -0.055, 0.055);
     this.cameraBank = MathUtils.lerp(this.cameraBank, targetBank, 1 - Math.exp(-dt * 10));
-    const quarterX = mobile ? 2.25 : 3.45;
-    this.camera.position.set(quarterX + playerX * 0.13, 4.25 + playerY * 0.1, mobile ? 9.9 : 9.1);
-    this.lookTarget.set(playerX * 0.2, 1.65 + playerY * 0.18, mobile ? -8.5 : -10.5);
+    this.camera.position.set(
+      framing.lateralOffset + playerX * 0.13,
+      4.25 + playerY * 0.1,
+      framing.cameraZ,
+    );
+    this.lookTarget.set(
+      playerX * 0.2,
+      1.65 + playerY * 0.18,
+      framing.lookTargetZ,
+    );
     this.camera.lookAt(this.lookTarget);
     this.camera.rotation.z += this.cameraBank;
   }
