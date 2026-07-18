@@ -474,7 +474,7 @@ def _download_fields(
     filenames: list[str] = []
     for field, filename in field_names.items():
         url = result.get(field)
-        if url is None:
+        if url is None or url == "":
             continue
         destination = output_dir / filename
         _download_file(url, destination)

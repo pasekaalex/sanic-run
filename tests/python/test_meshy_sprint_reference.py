@@ -772,6 +772,57 @@ class MeshySprintReferenceTests(unittest.TestCase):
         self.assertIn("animation_attempted_at", state)
         self.assertEqual(state["animation_status"], "CANCELED")
 
+    def test_poll_animation_skips_empty_optional_result_urls(self) -> None:
+        self.write_state(
+            {
+                "animation_task_id": "animation-task-example",
+                "animation_attempted_at": "2030-01-01T00:00:00Z",
+            }
+        )
+        requested: list[str] = []
+
+        def respond(request: urllib.request.Request, **_: object) -> FakeResponse:
+            requested.append(request.full_url)
+            if request.full_url.startswith(meshy.API_BASE):
+                return FakeResponse(
+                    {
+                        "id": "animation-task-example",
+                        "status": "SUCCEEDED",
+                        "progress": 100,
+                        "consumed_credits": 3,
+                        "result": {
+                            "animation_glb_url": "https://files.example/run.glb",
+                            "animation_fbx_url": "https://files.example/run.fbx",
+                            "processed_usdz_url": "",
+                            "processed_armature_fbx_url": "",
+                            "processed_animation_fps_fbx_url": (
+                                "https://files.example/run-24fps.fbx"
+                            ),
+                        },
+                    }
+                )
+            return FakeResponse(b"asset", json_response=False)
+
+        with mock.patch("urllib.request.urlopen", side_effect=respond):
+            result = meshy.poll_animation(
+                self.state_path,
+                self.output_dir,
+                self.environment,
+            )
+
+        self.assertEqual(
+            requested[1:],
+            [
+                "https://files.example/run.glb",
+                "https://files.example/run.fbx",
+                "https://files.example/run-24fps.fbx",
+            ],
+        )
+        self.assertEqual(
+            result["files"],
+            ["animation.glb", "animation.fbx", "processed-24fps.fbx"],
+        )
+
     def test_validator_ignores_images_not_referenced_by_visible_meshes(self) -> None:
         validator = load_blender_script("validate_meshy_reference")
         referenced = SimpleNamespace(
