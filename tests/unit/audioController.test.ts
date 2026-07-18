@@ -448,7 +448,7 @@ describe('AudioController', () => {
     audio.destroy();
   });
 
-  it('routes conservative music and effects buses beneath the capped master', () => {
+  it('routes audible authored music while preserving effects and master headroom', () => {
     const context = new FakeAudioContext();
     installAudioContext(context);
     const audio = new AudioController();
@@ -460,7 +460,10 @@ describe('AudioController', () => {
     expect(effects?.connections).toContain(master);
     expect(music?.connections).toContain(master);
     expect(effects?.gain.scheduled.at(-1)?.value).toBeLessThanOrEqual(1);
-    expect(music?.gain.scheduled.at(-1)?.value).toBeLessThan(0.6);
+    const masterGain = master?.gain.scheduled.at(-1)?.value ?? 0;
+    const musicGain = music?.gain.scheduled.at(-1)?.value ?? 0;
+    expect(masterGain * musicGain).toBeGreaterThanOrEqual(0.22);
+    expect(masterGain * musicGain).toBeLessThanOrEqual(0.25);
     audio.destroy();
   });
 

@@ -3,7 +3,7 @@ import { ZoneMusicPlayer } from './zoneMusicPlayer';
 
 const MASTER_GAIN = 0.16;
 const EFFECTS_GAIN = 0.95;
-const MUSIC_GAIN = 0.52;
+const MUSIC_GAIN = 1.5;
 const SILENCE = 0.0001;
 
 interface ToneOptions {
