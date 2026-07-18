@@ -88,11 +88,11 @@ describe('GameSimulation', () => {
     ) / step);
 
     expect(velocities[0]).toBeGreaterThan(15);
-    expect(velocities[0]).toBeLessThan(22);
+    expect(velocities[0]).toBeLessThan(26);
     expect(Math.max(...riseAccelerations)).toBeLessThan(-50);
     expect(Math.max(...riseAccelerations) - Math.min(...riseAccelerations)).toBeLessThan(0.05);
 
-    game.step(0.11);
+    game.step(0.15);
     const fallingHeights = sampleJump(game, step, 4);
     const fallingVelocities = fallingHeights.slice(1).map((height, index) => (
       height - fallingHeights[index]!
@@ -118,13 +118,30 @@ describe('GameSimulation', () => {
     expect(game.snapshot().playerY).toBeGreaterThan(0);
     expect(game.snapshot().jumpProgress).toBeGreaterThan(0.1);
 
-    game.step(0.49);
+    game.step(0.55);
     expect(game.snapshot().playerY).toBe(0);
     expect(game.snapshot().jumpProgress).not.toBeNull();
-    game.step(0.03);
+    game.step(0.04);
     expect(game.snapshot().jumpProgress).toBe(1);
-    game.step(0.02);
+    game.step(0.01);
     expect(game.snapshot().jumpProgress).toBeNull();
+  });
+
+  it('stays airborne slightly longer before an exact fast-fall landing', () => {
+    const game = new GameSimulation(30, scriptedSource([]));
+    game.start();
+    game.command('jump');
+
+    game.step(0.69);
+    expect(game.snapshot().playerY).toBeGreaterThan(0);
+    expect(game.snapshot().jumpProgress).not.toBeNull();
+
+    game.step(0.01);
+    expect(game.snapshot().playerY).toBe(0);
+    expect(game.snapshot().jumpProgress).not.toBeNull();
+
+    game.step(0.05);
+    expect(game.snapshot()).toMatchObject({ playerY: 0, jumpProgress: null });
   });
 
   it('has one readable apex followed by a monotonic descent and exact landing', () => {
@@ -135,8 +152,8 @@ describe('GameSimulation', () => {
     const heights = sampleJump(game, GAME.fixedStep, 75);
     const peak = Math.max(...heights);
     const peakIndex = heights.indexOf(peak);
-    expect(peak).toBeGreaterThan(3.0);
-    expect(peak).toBeLessThan(3.2);
+    expect(peak).toBeGreaterThan(4.2);
+    expect(peak).toBeLessThan(4.4);
     expect(peakIndex).toBeGreaterThan(20);
     expect(peakIndex).toBeLessThan(26);
     for (let index = 1; index <= peakIndex; index += 1) {
@@ -161,8 +178,8 @@ describe('GameSimulation', () => {
 
     expect(coarse.snapshot().playerY).toBeCloseTo(fine.snapshot().playerY, 8);
 
-    coarse.step(0.4);
-    for (let index = 0; index < 24; index += 1) fine.step(GAME.fixedStep);
+    coarse.step(0.45);
+    for (let index = 0; index < 27; index += 1) fine.step(GAME.fixedStep);
     expect(coarse.snapshot()).toMatchObject({ playerY: 0, jumpProgress: null });
     expect(fine.snapshot()).toMatchObject({ playerY: 0, jumpProgress: null });
   });
